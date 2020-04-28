@@ -1,3 +1,6 @@
+#include <glob.h>
+#include <libgen.h>
+#include <limits.h>
 #include <regex.h>
 #include <stdio.h>
 #include <string.h>
@@ -207,40 +210,56 @@ char *get_resource_info(cl_resource resource) {
 
 	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, raw_name_size, raw_name, NULL);
 
-	size_t version_size;
-	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, 0, NULL, &version_size);
-
-	char *version = (char *) malloc(version_size * sizeof(char));
-	if (!version) {
-		fprintf(stderr, "Error: malloc\n");
-		return strdup("intel | - | -");
-	}
-
-	memset(version, 0, version_size * sizeof(char));
-
-	inclGetDeviceInfo(resource->device_id, CL_DRIVER_VERSION, version_size, version, NULL);
-
 	char *name = (char *) malloc(raw_name_size * sizeof(char));
 	if (!name) {
+		free(raw_name);
 		fprintf(stderr, "Error: malloc\n");
 		return strdup("intel | - | -");
 	}
 
 	memset(name, 0, raw_name_size * sizeof(char));
 
-	const char *regex = "^([^ : ]+) : .*$";
+	long int major, minor;
+
+	const char *regex = "^([^ : ]+) : .*_(..)0000(.).$";
 
 	regex_t compile;
-	regmatch_t group[2];
+	regmatch_t group[4];
 
 	if (regcomp(&compile, regex, REG_EXTENDED)) {
+		free(raw_name);
+		free(name);
 		fprintf(stderr, "Error: regcomp\n");
 		return strdup("intel | - | -");
 	}
 
-	if (!regexec(&compile, raw_name, 2, group, 0)) {
+	if (!regexec(&compile, raw_name, 4, group, 0)) {
 		strncpy(name, raw_name + group[1].rm_so, group[1].rm_eo - group[1].rm_so);
+
+		char *tmp;
+
+		tmp = strndup(raw_name + group[2].rm_so, group[2].rm_eo - group[2].rm_so);
+		if (!tmp) {
+			free(raw_name);
+			free(name);
+			fprintf(stderr, "Error: strndup\n");
+			return strdup("intel | - | -");
+		}
+		major = strtol(tmp, NULL, 16);
+		free(tmp);
+
+		tmp = strndup(raw_name + group[3].rm_so, group[3].rm_eo - group[3].rm_so);
+		if (!tmp) {
+			free(raw_name);
+			free(name);
+			fprintf(stderr, "Error: strndup\n");
+			return strdup("intel | - | -");
+		}
+		minor = strtol(tmp, NULL, 16);
+		free(tmp);
 	} else {
+		free(raw_name);
+		free(name);
 		fprintf(stderr, "Error: regexec\n");
 		return strdup("intel | - | -");
 	}
@@ -249,8 +268,74 @@ char *get_resource_info(cl_resource resource) {
 
 	free(raw_name);
 
+	size_t UUID = 32;
+
+	char *version = (char *) malloc((UUID + 1) * sizeof(char));
+	if (!version) {
+		free(name);
+		fprintf(stderr, "Error: malloc\n");
+		return strdup("intel | - | -");
+	}
+
+	memset(version, 0, (UUID + 1) * sizeof(char));
+
+	glob_t dev;
+	if (!glob("/sys/devices/pci*/*/*/fpga/intel-fpga-dev.*/intel-fpga-port.*/dev", GLOB_NOSORT, NULL, &dev)) {
+		size_t i;
+		for (i = 0; i < dev.gl_pathc; i++) {
+			long int dev_major;
+			long int dev_minor;
+
+			FILE *dev_file = fopen(dev.gl_pathv[i], "r");
+			if (!dev_file) {
+				continue;
+			}
+			if (fscanf(dev_file, "%ld:%ld", &dev_major, &dev_minor) == EOF) {
+				continue;
+			}
+			if (fclose(dev_file) == EOF) {
+				continue;
+			}
+
+			if ((major == dev_major) && (minor == dev_minor)) {
+				char path[PATH_MAX];
+				sprintf(path, "%s/intel-fpga-fme.*/pr/interface_id", dirname(dirname(dev.gl_pathv[i])));
+
+				glob_t interface_id;
+				if (!glob(path, GLOB_NOSORT, NULL, &interface_id)) {
+					size_t j;
+					for (j = 0; j < interface_id.gl_pathc; j++) {
+						FILE *interface_id_file = fopen(interface_id.gl_pathv[j], "r");
+						if (!interface_id_file) {
+							continue;
+						}
+						if (!fgets(version, UUID + 1, interface_id_file)) {
+							continue;
+						}
+						if (fclose(interface_id_file) == EOF) {
+							continue;
+						}
+					}
+					globfree(&interface_id);
+				}
+
+				break;
+			}
+		}
+		globfree(&dev);
+	}
+
+	if (!strlen(version)) {
+		free(name);
+		free(version);
+		fprintf(stderr, "Error: strlen\n");
+		return strdup("intel | - | -");
+	}
+
 	char *identifier = (char *) malloc(strlen("intel") + 3 + strlen(name) + 3 + strlen(version) + 1);
 	if (!identifier) {
+		free(name);
+		free(version);
 		fprintf(stderr, "Error: malloc\n");
 		return strdup("intel | - | -");
 	}
@@ -287,6 +372,7 @@ char *get_resource_info(cl_resource resource) {
 
 	char *name = (char *) malloc(raw_name_size * sizeof(char));
 	if (!name) {
+		free(raw_name);
 		fprintf(stderr, "Error: malloc\n");
 		return strdup("xilinx | - | -");
 	}
@@ -295,6 +381,8 @@ char *get_resource_info(cl_resource resource) {
 
 	char *version = (char *) malloc(raw_name_size * sizeof(char));
 	if (!version) {
+		free(raw_name);
+		free(name);
 		fprintf(stderr, "Error: malloc\n");
 		return strdup("xilinx | - | -");
 	}
@@ -307,6 +395,9 @@ char *get_resource_info(cl_resource resource) {
 	regmatch_t group[5];
 
 	if (regcomp(&compile, regex, REG_EXTENDED)) {
+		free(raw_name);
+		free(name);
+		free(version);
 		fprintf(stderr, "Error: regcomp\n");
 		return strdup("xilinx | - | -");
 	}
@@ -330,6 +421,8 @@ char *get_resource_info(cl_resource resource) {
 
 	char *identifier = (char *) malloc(strlen("xilinx") + 3 + strlen(name) + 3 + strlen(version) + 1);
 	if (!identifier) {
+		free(name);
+		free(version);
 		fprintf(stderr, "Error: malloc\n");
 		return strdup("xilinx | - | -");
 	}
