@@ -4,9 +4,46 @@
 #include <regex.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "CL/opencl.h"
 #include "runtime.h"
+
+#ifdef Xilinx
+static const char *MEM_TYPE[] = {
+	"MEM_DDR3",
+	"MEM_DDR4",
+	"MEM_DRAM",
+	"MEM_STREAMING",
+	"MEM_PREALLOCATED_GLOB",
+	"MEM_ARE",
+	"MEM_HBM",
+	"MEM_BRAM",
+	"MEM_URAM",
+	"MEM_STREAMING_CONNECTION"
+};
+
+struct mem_data {
+	uint8_t m_type;          // enum corresponding to mem_type.
+	uint8_t m_used;          // if 0 this bank is not present
+	uint8_t padding[6];      // 8 Byte alignment padding (initialized to zeros)
+	union {
+		uint64_t m_size;     // if mem_type DDR, then size in KB;
+		uint64_t route_id;   // if streaming then "route_id"
+	};
+	union {
+		uint64_t m_base_address; // if DDR then the base address;
+		uint64_t flow_id;        // if streaming then "flow id"
+	};
+	unsigned char m_tag[16]; // DDR: BANK0,1,2,3, has to be null terminated; if streaming then stream0, 1 etc
+};
+
+struct mem_topology {
+	int32_t m_count; //Number of mem_data
+	struct mem_data m_mem_data[1]; //Should be sorted on mem_type
+};
+#endif
+
 
 /* CL buffer struct (Type). */
 struct _cl_buffer {
@@ -22,13 +59,108 @@ struct _cl_compute_unit {
 	cl_kernel kernel;
 };
 
+/* CL memory struct (Type). */
+struct _cl_memory {
+	unsigned int id;
+	cl_resource resource;
+};
+
 /* CL resource struct (Type). */
 struct _cl_resource {
+	// Virtual device variables
 	cl_context context;
 	cl_device_id device_id;
 	cl_platform_id platform_id;
 	cl_program program;
+
+	// Physical device variables
+	char *name;
+	char *root_path;
+	char *vendor;
+	char *version;
+
+	FILE *temperature;
+#ifdef Intel
+	FILE *sdr;
+	FILE *sensors;
+	size_t mem_capacity;
+#endif
+#ifdef Xilinx
+	FILE *power;
+	char *serial_no;
+	struct mem_topology *topology;
+#endif
 };
+
+#ifdef Intel
+#define SIGN_EXT(val, bitpos) (((val) ^ (1 << (bitpos))) - (1 << (bitpos)))
+
+char *intel_get_power(cl_resource resource) {
+	unsigned char calc_params[6];
+	unsigned char reading;
+
+	if (resource->sdr && resource->sensors) {
+		if (fseek(resource->sdr, 24, SEEK_SET))
+			return NULL;
+
+		int ret;
+		if(!(ret = fread(calc_params, sizeof(char), 6, resource->sdr)))
+			return NULL;
+
+		if (fseek(resource->sensors, 4, SEEK_SET))
+			return NULL;
+
+
+		if(!(ret = fread(&reading, sizeof(char), 1, resource->sensors)))
+			return NULL;
+
+		int32_t B_val = ((calc_params[3] >> 6 & 0x3) << 8) | calc_params[2];
+		B_val = SIGN_EXT(B_val, 9);
+
+		int32_t M_val = ((calc_params[1] >> 6 & 0x3) << 8) | calc_params[0];
+		M_val = SIGN_EXT(M_val, 9);
+
+		int32_t R_exp = calc_params[5] >> 4 & 0x0F;
+		R_exp = SIGN_EXT(R_exp, 3);
+
+		int32_t B_exp = calc_params[5] & 0x0F;
+		B_exp = SIGN_EXT(B_exp, 3);
+
+		double M = M_val;
+		double B = B_val;
+
+		int i;
+		if (B_exp >= 0) {
+			for (i = 0; i < B_exp; i++) {
+				B *= 10.0;
+			}
+		} else {
+			for (i = B_exp; i; i++) {
+				B /= 10.0;
+			}
+		}
+
+		double sensor_value = M * reading + B;
+
+		if (R_exp >= 0) {
+			for (i = 0; i < R_exp; i++) {
+				sensor_value *= 10.0;
+			}
+		} else {
+			for (i = R_exp; i; i++) {
+				sensor_value /= 10.0;
+			}
+		}
+
+		char *power = (char *) malloc(7); // 000.00 + '\0' = 7 chars max
+		sprintf(power, "%.2f", (float) sensor_value);
+
+		return power;
+	}
+
+	return strdup("-");
+}
+#endif
 
 /**
  * Waits on the host thread until all previous copy commands are issued to the associated resource and have completed.
@@ -78,22 +210,21 @@ int copy_to_buffer(cl_buffer buffer) {
 
 /**
  * Creates a buffer object.
- * @param resource A valid resource used to create the buffer object.
+ * @param memory A valid memory used to create the buffer object.
  * @param size The size in bytes of the buffer memory object to be allocated.
  * @param host_ptr A pointer to the buffer data that should already be allocated by the application. The size of the buffer that address points to must be greater than or equal to the size bytes.
- * @param memory_id The memory associated with this buffer.
  * @return The buffer.
  */
-cl_buffer create_buffer(cl_resource resource, size_t size, void *host_ptr, unsigned int memory_id) {
+cl_buffer create_buffer(cl_memory memory, size_t size, void *host_ptr) {
 	cl_buffer buffer = (cl_buffer) calloc(1, sizeof(struct _cl_buffer));
 
 	buffer->size = size;
 	buffer->host_ptr = host_ptr;
 
 #ifdef Intel
-	cl_uint CL_MEMORY = memory_id << 16;
+	cl_uint CL_MEMORY = memory->id << 16;
 
-	if (!(buffer->mem = inclCreateBuffer(resource->context, CL_MEM_READ_WRITE | CL_MEMORY, size, NULL))) goto CATCH;
+	if (!(buffer->mem = inclCreateBuffer(memory->resource->context, CL_MEM_READ_WRITE | CL_MEMORY, size, NULL))) goto CATCH;
 #endif
 #ifdef Xilinx
 	cl_uint CL_MEM_EXT_PTR = 1 << 31;
@@ -104,17 +235,17 @@ cl_buffer create_buffer(cl_resource resource, size_t size, void *host_ptr, unsig
 		void *param;
 	} cl_mem_ext_ptr_t;
 
-	cl_uint CL_MEMORY = memory_id | (1 << 31);
+	cl_uint CL_MEMORY = memory->id | (1 << 31);
 
 	cl_mem_ext_ptr_t ext_ptr;
 	ext_ptr.flags = CL_MEMORY;
 	ext_ptr.obj = host_ptr;
 	ext_ptr.param = 0;
 
-	if (!(buffer->mem = inclCreateBuffer(resource->context, CL_MEM_EXT_PTR | CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, size, &ext_ptr))) goto CATCH;
+	if (!(buffer->mem = inclCreateBuffer(memory->resource->context, CL_MEM_EXT_PTR | CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, size, &ext_ptr))) goto CATCH;
 #endif
 
-	if (!(buffer->command_queue = inclCreateCommandQueue(resource->context, resource->device_id))) goto CATCH;
+	if (!(buffer->command_queue = inclCreateCommandQueue(memory->resource->context, memory->resource->device_id))) goto CATCH;
 
 	return buffer;
 CATCH:
@@ -144,6 +275,35 @@ CATCH:
 }
 
 /**
+ * Creates a memory object.
+ * @param resource A valid resource used to create the memory object.
+ * @param index The index associated with this memory.
+ * @return The memory.
+ */
+cl_memory create_memory(cl_resource resource, unsigned int index) {
+#ifdef Intel
+	// Intel has only one memory (for now)
+	printf("trying to create memory with index: %u\n", index);
+	fflush(stdout);
+	if (!index) {
+#endif
+#ifdef Xilinx
+	if (resource->topology && (index < resource->topology->m_count)) {
+#endif
+		printf("creating memory with index: %u\n", index);
+		fflush(stdout);
+		cl_memory memory = (cl_memory) calloc(1, sizeof(struct _cl_memory));
+
+		memory->id = index;
+		memory->resource = resource;
+
+		return memory;
+	}
+
+	return NULL;
+}
+
+/**
  * Creates a resource object.
  * @param device_id The device associated with this resource.
  * @return The resource.
@@ -152,16 +312,326 @@ cl_resource create_resource(unsigned int device_id) {
 	cl_resource resource = (cl_resource) calloc(1, sizeof(struct _cl_resource));
 
 #ifdef Intel
+	resource->vendor = strdup("intel");
 	if (!(resource->platform_id = inclGetPlatformID("Intel"))) goto CATCH;
-#endif
-#ifdef Xilinx
-	if (!(resource->platform_id = inclGetPlatformID("Xilinx"))) goto CATCH;
-#endif
 
 	if (!(resource->device_id = inclGetDeviceID(resource->platform_id, device_id))) goto CATCH;
 
 	if (!(resource->context = inclCreateContext(resource->device_id))) goto CATCH;
 
+	cl_ulong mem_capacity;
+	inclGetDeviceInfo(resource->device_id, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(mem_capacity), &mem_capacity, NULL);
+	// mem_capacity is returned into MiB, so we convert it to bytes
+	resource->mem_capacity = mem_capacity;
+
+	size_t raw_name_size;
+	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, 0, NULL, &raw_name_size);
+
+	char *raw_name = (char *) malloc(raw_name_size * sizeof(char));
+	if (!raw_name) {
+		fprintf(stderr, "Error: malloc\n");
+		return resource;
+	}
+
+	memset(raw_name, 0, raw_name_size * sizeof(char));
+
+	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, raw_name_size, raw_name, NULL);
+
+	char *name = (char *) malloc(raw_name_size * sizeof(char));
+	if (!name) {
+		free(raw_name);
+		fprintf(stderr, "Error: malloc\n");
+		return resource;
+	}
+
+	memset(name, 0, raw_name_size * sizeof(char));
+
+	const char *regex = "^([^ : ]+) : .*_(..)0000(.).$";
+
+	regex_t compile;
+	regmatch_t group[4];
+
+	if (regcomp(&compile, regex, REG_EXTENDED)) {
+		free(raw_name);
+		free(name);
+		fprintf(stderr, "Error: regcomp\n");
+		return resource;
+	}
+
+	long int major, minor;
+
+	if (!regexec(&compile, raw_name, 4, group, 0)) {
+		strncpy(name, raw_name + group[1].rm_so, group[1].rm_eo - group[1].rm_so);
+		resource->name = name;
+
+		char *tmp;
+
+		tmp = strndup(raw_name + group[2].rm_so, group[2].rm_eo - group[2].rm_so);
+		if (!tmp) {
+			free(raw_name);
+			fprintf(stderr, "Error: strndup\n");
+			return resource;
+		}
+		major = strtol(tmp, NULL, 16);
+		free(tmp);
+
+		tmp = strndup(raw_name + group[3].rm_so, group[3].rm_eo - group[3].rm_so);
+		if (!tmp) {
+			free(raw_name);
+			fprintf(stderr, "Error: strndup\n");
+			return resource;
+		}
+		minor = strtol(tmp, NULL, 16);
+		free(tmp);
+	} else {
+		free(raw_name);
+		fprintf(stderr, "Error: regexec\n");
+		return resource;
+	}
+
+	regfree(&compile);
+
+	free(raw_name);
+
+	size_t UUID = 32;
+
+	char *version = (char *) malloc((UUID + 1) * sizeof(char));
+	if (!version) {
+		fprintf(stderr, "Error: malloc\n");
+		return resource;
+	}
+
+	memset(version, 0, (UUID + 1) * sizeof(char));
+
+	glob_t dev;
+	if (!glob("/sys/devices/pci*/*/{,/*}/fpga/intel-fpga-dev.*/intel-fpga-port.*/dev", GLOB_NOSORT | GLOB_BRACE, NULL, &dev)) {
+		size_t i;
+		for (i = 0; i < dev.gl_pathc; i++) {
+			long int dev_major;
+			long int dev_minor;
+
+			FILE *dev_file = fopen(dev.gl_pathv[i], "r");
+			if (!dev_file) {
+				continue;
+			}
+			if (fscanf(dev_file, "%ld:%ld", &dev_major, &dev_minor) == EOF) {
+				continue;
+			}
+			if (fclose(dev_file) == EOF) {
+				continue;
+			}
+
+			if ((major == dev_major) && (minor == dev_minor)) {
+				char path[PATH_MAX];
+				sprintf(path, "%s/intel-fpga-fme.*/pr/interface_id", dirname(dirname(dev.gl_pathv[i])));
+
+				glob_t interface_id;
+				if (!glob(path, GLOB_NOSORT, NULL, &interface_id)) {
+					FILE *interface_id_file = fopen(interface_id.gl_pathv[0], "r");
+					if (!interface_id_file) {
+						continue;
+					}
+					if (!fgets(version, UUID + 1, interface_id_file)) {
+						continue;
+					}
+					if (fclose(interface_id_file) == EOF) {
+						continue;
+					}
+
+					resource->root_path = strdup(dirname(dirname(interface_id.gl_pathv[0])));
+
+					globfree(&interface_id);
+				}
+
+				break;
+			}
+		}
+		globfree(&dev);
+	}
+
+	if (!strlen(version)) {
+		free(version);
+		fprintf(stderr, "Error: strlen\n");
+		return resource;
+	}
+	resource->version = version;
+
+	char path[PATH_MAX];
+	sprintf(path, "%s/%s", resource->root_path, "thermal_mgmt/temperature");
+	resource->temperature = fopen(path, "r");
+
+	sprintf(path, "%s/%s", resource->root_path, "avmmi-bmc.*.auto/bmc_info");
+
+	glob_t bmc;
+	if (!glob(path, GLOB_NOSORT, NULL, &bmc)) {
+		sprintf(path, "%s/%s", bmc.gl_pathv[0], "sdr");
+		resource->sdr = fopen(path, "r");
+
+		sprintf(path, "%s/%s", bmc.gl_pathv[0], "sensors");
+		resource->sensors = fopen(path, "r");
+
+		globfree(&bmc);
+	}
+#endif
+#ifdef Xilinx
+	resource->vendor = strdup("xilinx");
+
+	if (!(resource->platform_id = inclGetPlatformID("Xilinx"))) goto CATCH;
+
+	if (!(resource->device_id = inclGetDeviceID(resource->platform_id, device_id))) goto CATCH;
+
+	if (!(resource->context = inclCreateContext(resource->device_id))) goto CATCH;
+
+	size_t raw_name_size;
+	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, 0, NULL, &raw_name_size);
+
+	char *raw_name = (char *) malloc(raw_name_size * sizeof(char));
+	if (!raw_name) {
+		fprintf(stderr, "Error: malloc\n");
+		return resource;
+	}
+
+	memset(raw_name, 0, raw_name_size * sizeof(char));
+
+	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, raw_name_size, raw_name, NULL);
+
+	char *name = (char *) malloc(raw_name_size * sizeof(char));
+	if (!name) {
+		free(raw_name);
+		fprintf(stderr, "Error: malloc\n");
+		return resource;
+	}
+
+	memset(name, 0, raw_name_size * sizeof(char));
+
+	char *version = (char *) malloc(raw_name_size * sizeof(char));
+	if (!version) {
+		free(raw_name);
+		free(name);
+		fprintf(stderr, "Error: malloc\n");
+		return resource;
+	}
+
+	memset(version, 0, raw_name_size * sizeof(char));
+
+	const char *regex = "^xilinx_([^_]+)_(.*)_([^_]+)_([^_]+)$";
+
+	regex_t compile;
+	regmatch_t group[5];
+
+	if (regcomp(&compile, regex, REG_EXTENDED)) {
+		free(raw_name);
+		free(name);
+		free(version);
+		fprintf(stderr, "Error: regcomp\n");
+		return resource;
+	}
+
+	if (!regexec(&compile, raw_name, 5, group, 0)) {
+		strncpy(name, raw_name + group[1].rm_so, group[1].rm_eo - group[1].rm_so);
+
+		strncpy(version, raw_name + group[2].rm_so, group[2].rm_eo - group[2].rm_so);
+		strcat(version, "_");
+		strncat(version, raw_name + group[3].rm_so, group[3].rm_eo - group[3].rm_so);
+		strcat(version, ".");
+		strncat(version, raw_name + group[4].rm_so, group[4].rm_eo - group[4].rm_so);
+	} else {
+		fprintf(stderr, "Error: regexec\n");
+		return resource;
+	}
+
+	resource->name = name;
+	resource->version = version;
+
+	regfree(&compile);
+
+	free(raw_name);
+
+	glob_t dev;
+	unsigned idx = 0;
+
+	if (!glob("/sys/bus/pci/drivers/{xocl,xuser}/*:*:*.*", GLOB_BRACE, NULL, &dev)) {
+		size_t i;
+		for (i = dev.gl_pathc; i > 0; i--) {
+			char temp_dev[PATH_MAX / 2] = {0};
+			if (readlink(dev.gl_pathv[i - 1], temp_dev, sizeof(temp_dev) - 1) == 1)
+				return resource;
+
+			char path[PATH_MAX];
+			sprintf(path, "%s/%s/ready", dirname(dev.gl_pathv[i - 1]), temp_dev);
+
+			FILE *ready_file = fopen(path, "r");
+			if (!ready_file) continue;
+
+			unsigned ready;
+			if(fscanf(ready_file, "0x%d", &ready) <= 0) continue;
+
+			fclose(ready_file);
+
+			if (ready) {
+				if (idx == device_id) {
+					resource->root_path = strdup(dirname(path));
+
+					break;
+				}
+				else idx++;
+			}
+		}
+	}
+
+	globfree(&dev);
+
+	char path[PATH_MAX];
+	sprintf(path, "%s/xmc.*", resource->root_path);
+
+	glob_t xmc;
+	if (!glob(path, GLOB_NOSORT, NULL, &xmc)) {
+		sprintf(path, "%s/%s", xmc.gl_pathv[0], "xmc_fpga_temp");
+		resource->temperature = fopen(path, "r");
+
+		sprintf(path, "%s/%s", xmc.gl_pathv[0], "xmc_power");
+		resource->power = fopen(path, "r");
+
+
+		sprintf(path, "%s/%s", xmc.gl_pathv[0], "serial_num");
+		FILE *serial = fopen(path, "r");
+		if (serial) {
+			char serial_no[50];
+
+			if (fscanf(serial,"%s", serial_no)) {
+				resource->serial_no = strdup(serial_no);
+			}
+
+			fclose(serial);
+		}
+	}
+	globfree(&xmc);
+
+	sprintf(path, "%s/icap.*", resource->root_path);
+
+	glob_t icap;
+	if (!glob(path, GLOB_NOSORT, NULL, &icap)) {
+		sprintf(path, "%s/%s", icap.gl_pathv[0], "mem_topology");
+
+		FILE *mem_topology = fopen(path, "r");
+		if (mem_topology) {
+			//PATH_MAX bytes should be sufficient for mem_topology
+			char *topology = (char *) malloc(PATH_MAX);
+			size_t topology_bytes = fread(topology, sizeof(char), PATH_MAX, mem_topology);
+
+			fclose(mem_topology);
+
+			if (!topology_bytes)
+				free(topology);
+			else {
+				resource->topology = (struct mem_topology *) topology;
+			}
+		}
+	}
+	globfree(&icap);
+#endif
+	printf("Resource: %p\n", resource);
+	fflush(stdout);
 	return resource;
 CATCH:
 	free(resource);
@@ -188,258 +658,88 @@ size_t get_buffer_size(cl_buffer buffer) {
 }
 
 /**
+ * Get the size of a memory.
+ * @param memory Refers to a valid memory object.
+ * @return The size of the memory in bytes
+ */
+size_t get_memory_size(cl_memory memory) {
+#ifdef Intel
+	return memory->resource->mem_capacity;
+#endif
+#ifdef Xilinx
+	// Cross-check that the memory still exists in the topology
+	if (memory->id < memory->resource->topology->m_count) {
+		return memory->resource->topology->m_mem_data[memory->id].m_size * 1024;
+	}
+
+	return 0;
+#endif
+}
+
+/**
  * Get specific information about a resource.
  * @param resource Refers to a valid resource object.
  * @return A "vendor | name | version" string.
  */
-char *get_resource_info(cl_resource resource) {
+char *get_resource_info(cl_resource resource, enum resource_options option) {
+	printf("Requested resource info!\n");
+	fflush(stdout);
+
+	switch(option) {
+		case NAME:
+			if (resource->name)
+				return resource->name;
+			else
+				return strdup("-");
+		case POWER:
 #ifdef Intel
-	size_t valid;
-	inclGetPlatformInfo(resource->platform_id, CL_PLATFORM_NAME, 0, NULL, &valid);
-
-	size_t raw_name_size;
-	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, 0, NULL, &raw_name_size);
-
-	char *raw_name = (char *) malloc(raw_name_size * sizeof(char));
-	if (!raw_name) {
-		fprintf(stderr, "Error: malloc\n");
-		return strdup("intel | - | -");
-	}
-
-	memset(raw_name, 0, raw_name_size * sizeof(char));
-
-	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, raw_name_size, raw_name, NULL);
-
-	char *name = (char *) malloc(raw_name_size * sizeof(char));
-	if (!name) {
-		free(raw_name);
-		fprintf(stderr, "Error: malloc\n");
-		return strdup("intel | - | -");
-	}
-
-	memset(name, 0, raw_name_size * sizeof(char));
-
-	long int major, minor;
-
-	const char *regex = "^([^ : ]+) : .*_(..)0000(.).$";
-
-	regex_t compile;
-	regmatch_t group[4];
-
-	if (regcomp(&compile, regex, REG_EXTENDED)) {
-		free(raw_name);
-		free(name);
-		fprintf(stderr, "Error: regcomp\n");
-		return strdup("intel | - | -");
-	}
-
-	if (!regexec(&compile, raw_name, 4, group, 0)) {
-		strncpy(name, raw_name + group[1].rm_so, group[1].rm_eo - group[1].rm_so);
-
-		char *tmp;
-
-		tmp = strndup(raw_name + group[2].rm_so, group[2].rm_eo - group[2].rm_so);
-		if (!tmp) {
-			free(raw_name);
-			free(name);
-			fprintf(stderr, "Error: strndup\n");
-			return strdup("intel | - | -");
-		}
-		major = strtol(tmp, NULL, 16);
-		free(tmp);
-
-		tmp = strndup(raw_name + group[3].rm_so, group[3].rm_eo - group[3].rm_so);
-		if (!tmp) {
-			free(raw_name);
-			free(name);
-			fprintf(stderr, "Error: strndup\n");
-			return strdup("intel | - | -");
-		}
-		minor = strtol(tmp, NULL, 16);
-		free(tmp);
-	} else {
-		free(raw_name);
-		free(name);
-		fprintf(stderr, "Error: regexec\n");
-		return strdup("intel | - | -");
-	}
-
-	regfree(&compile);
-
-	free(raw_name);
-
-	size_t UUID = 32;
-
-	char *version = (char *) malloc((UUID + 1) * sizeof(char));
-	if (!version) {
-		free(name);
-		fprintf(stderr, "Error: malloc\n");
-		return strdup("intel | - | -");
-	}
-
-	memset(version, 0, (UUID + 1) * sizeof(char));
-
-	glob_t dev;
-	if (!glob("/sys/devices/pci*/*/*/fpga/intel-fpga-dev.*/intel-fpga-port.*/dev", GLOB_NOSORT, NULL, &dev)) {
-		size_t i;
-		for (i = 0; i < dev.gl_pathc; i++) {
-			long int dev_major;
-			long int dev_minor;
-
-			FILE *dev_file = fopen(dev.gl_pathv[i], "r");
-			if (!dev_file) {
-				continue;
-			}
-			if (fscanf(dev_file, "%ld:%ld", &dev_major, &dev_minor) == EOF) {
-				continue;
-			}
-			if (fclose(dev_file) == EOF) {
-				continue;
-			}
-
-			if ((major == dev_major) && (minor == dev_minor)) {
-				char path[PATH_MAX];
-				sprintf(path, "%s/intel-fpga-fme.*/pr/interface_id", dirname(dirname(dev.gl_pathv[i])));
-
-				glob_t interface_id;
-				if (!glob(path, GLOB_NOSORT, NULL, &interface_id)) {
-					size_t j;
-					for (j = 0; j < interface_id.gl_pathc; j++) {
-						FILE *interface_id_file = fopen(interface_id.gl_pathv[j], "r");
-						if (!interface_id_file) {
-							continue;
-						}
-						if (!fgets(version, UUID + 1, interface_id_file)) {
-							continue;
-						}
-						if (fclose(interface_id_file) == EOF) {
-							continue;
-						}
-					}
-					globfree(&interface_id);
-				}
-
-				break;
-			}
-		}
-		globfree(&dev);
-	}
-
-	if (!strlen(version)) {
-		free(name);
-		free(version);
-		fprintf(stderr, "Error: strlen\n");
-		return strdup("intel | - | -");
-	}
-
-	char *identifier = (char *) malloc(strlen("intel") + 3 + strlen(name) + 3 + strlen(version) + 1);
-	if (!identifier) {
-		free(name);
-		free(version);
-		fprintf(stderr, "Error: malloc\n");
-		return strdup("intel | - | -");
-	}
-
-	memset(identifier, 0, strlen("intel") + 3 + strlen(name) + 3 + strlen(version) + 1);
-
-	strcpy(identifier, "intel");
-	strcat(identifier, " | ");
-	strcat(identifier, name);
-	strcat(identifier, " | ");
-	strcat(identifier, version);
-
-	free(name);
-	free(version);
-
-	return identifier;
+			return intel_get_power(resource);
 #endif
 #ifdef Xilinx
-	size_t valid;
-	inclGetPlatformInfo(resource->platform_id, CL_PLATFORM_NAME, 0, NULL, &valid);
+			if (resource->power) {
+				char tmp[10] = {0};
+				if(fscanf(resource->power, "%s", tmp) != EOF) {
+					fseek(resource->power, 0, SEEK_SET);
+					// Power is obtained in uWatts so we convert it to Watts
+					size_t size = strlen(tmp);
+					float value = ((double) strtoul(tmp, NULL, 10)) / 1000000;
 
-	size_t raw_name_size;
-	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, 0, NULL, &raw_name_size);
+					char *power = (char *) malloc(size);
+					sprintf(power ,"%.2f", value);
 
-	char *raw_name = (char *) malloc(raw_name_size * sizeof(char));
-	if (!raw_name) {
-		fprintf(stderr, "Error: malloc\n");
-		return strdup("xilinx | - | -");
-	}
+					return power;
+				}
+			}
 
-	memset(raw_name, 0, raw_name_size * sizeof(char));
-
-	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, raw_name_size, raw_name, NULL);
-
-	char *name = (char *) malloc(raw_name_size * sizeof(char));
-	if (!name) {
-		free(raw_name);
-		fprintf(stderr, "Error: malloc\n");
-		return strdup("xilinx | - | -");
-	}
-
-	memset(name, 0, raw_name_size * sizeof(char));
-
-	char *version = (char *) malloc(raw_name_size * sizeof(char));
-	if (!version) {
-		free(raw_name);
-		free(name);
-		fprintf(stderr, "Error: malloc\n");
-		return strdup("xilinx | - | -");
-	}
-
-	memset(version, 0, raw_name_size * sizeof(char));
-
-	const char *regex = "^xilinx_([^_]+)_(.*)_([^_]+)_([^_]+)$";
-
-	regex_t compile;
-	regmatch_t group[5];
-
-	if (regcomp(&compile, regex, REG_EXTENDED)) {
-		free(raw_name);
-		free(name);
-		free(version);
-		fprintf(stderr, "Error: regcomp\n");
-		return strdup("xilinx | - | -");
-	}
-
-	if (!regexec(&compile, raw_name, 5, group, 0)) {
-		strncpy(name, raw_name + group[1].rm_so, group[1].rm_eo - group[1].rm_so);
-
-		strncpy(version, raw_name + group[2].rm_so, group[2].rm_eo - group[2].rm_so);
-		strcat(version, "_");
-		strncat(version, raw_name + group[3].rm_so, group[3].rm_eo - group[3].rm_so);
-		strcat(version, ".");
-		strncat(version, raw_name + group[4].rm_so, group[4].rm_eo - group[4].rm_so);
-	} else {
-		fprintf(stderr, "Error: regexec\n");
-		return strdup("xilinx | - | -");
-	}
-
-	regfree(&compile);
-
-	free(raw_name);
-
-	char *identifier = (char *) malloc(strlen("xilinx") + 3 + strlen(name) + 3 + strlen(version) + 1);
-	if (!identifier) {
-		free(name);
-		free(version);
-		fprintf(stderr, "Error: malloc\n");
-		return strdup("xilinx | - | -");
-	}
-
-	memset(identifier, 0, strlen("xilinx") + 3 + strlen(name) + 3 + strlen(version) + 1);
-
-	strcpy(identifier, "xilinx");
-	strcat(identifier, " | ");
-	strcat(identifier, name);
-	strcat(identifier, " | ");
-	strcat(identifier, version);
-
-	free(name);
-	free(version);
-
-	return identifier;
+			return strdup("-");
 #endif
+		case SERIAL_NO:
+#ifdef Xilinx
+			if(resource->serial_no)
+				return resource->serial_no;
+#endif
+			return strdup("-");
+		case TEMPERATURE:
+			if (resource->temperature) {
+				char temperature[4] = {0};
+				if(fscanf(resource->temperature, "%s", temperature) != EOF) {
+					fseek(resource->temperature, 0, SEEK_SET);
+					return strdup(temperature);
+				}
+			}
+
+			return strdup("-");
+		case VENDOR:
+			if (resource->vendor)
+				return resource->vendor;
+			else
+				return strdup("-");
+		case VERSION:
+			if (resource->version)
+				return resource->version;
+			else
+				return strdup("-");
+	}
 }
 
 /**
@@ -450,13 +750,50 @@ char *get_resource_info(cl_resource resource) {
  * @return 0 on success; 1 on failure.
  */
 int program_resource_with_binary(cl_resource resource, size_t length, const unsigned char *binary) {
+	printf("Resource: %p, length: %lu, binary:%p\n", resource, length, binary);
+	fflush(stdout);
 	if (resource->program) if (inclReleaseProgram(resource->program)) goto CATCH;
 
 	if (!(resource->program = inclCreateProgramWithBinary(resource->context, resource->device_id, length, binary))) goto CATCH;
 
 	if (inclBuildProgram(resource->program)) goto CATCH;
 
+#ifdef Intel
 	return EXIT_SUCCESS;
+#endif
+// In Intel the mem_topology remains unchangeable
+#ifdef Xilinx
+	// mem_topology changes every time we program the device
+	if (resource->topology) free(resource->topology);
+
+	char path[PATH_MAX];
+	sprintf(path, "%s/icap.*", resource->root_path);
+
+	glob_t icap;
+	if (!glob(path, GLOB_NOSORT, NULL, &icap)) {
+		sprintf(path, "%s/%s", icap.gl_pathv[0], "mem_topology");
+		globfree(&icap);
+
+		FILE *mem_topology = fopen(path, "r");
+		if (mem_topology) {
+			//PATH_MAX bytes should be sufficient for mem_topology
+			char *topology = (char *) malloc(PATH_MAX);
+			size_t topology_bytes = fread(topology, sizeof(char), PATH_MAX, mem_topology);
+
+			fclose(mem_topology);
+
+			if (!topology_bytes) {
+				free(topology);
+				goto CATCH;
+			}
+			else {
+				resource->topology = (struct mem_topology *) topology;
+				return EXIT_SUCCESS;
+			}
+		}
+	}
+#endif
+
 CATCH:
 	return EXIT_FAILURE;
 }
@@ -486,6 +823,14 @@ void release_compute_unit(cl_compute_unit compute_unit) {
 }
 
 /**
+ * Deletes a memory object.
+ * @param memory Refers to a valid memory object.
+ */
+void release_memory(cl_memory memory) {
+	if(memory) free(memory);
+}
+
+/**
  * Deletes a resource object.
  * @param resource Refers to a valid resource object.
  */
@@ -493,6 +838,22 @@ void release_resource(cl_resource resource) {
 	if (resource->program) inclReleaseProgram(resource->program);
 
 	inclReleaseContext(resource->context);
+
+	if (resource->name) free(resource->name);
+	if (resource->root_path) free(resource->root_path);
+	if (resource->vendor) free(resource->vendor);
+	if (resource->version) free(resource->version);
+
+	if (resource->temperature) fclose(resource->temperature);
+#ifdef Intel
+	if (resource->sdr) fclose(resource->sdr);
+	if (resource->sensors) fclose(resource->sensors);
+#endif
+#ifdef Xilinx
+	if (resource->power) fclose(resource->power);
+	if (resource->serial_no) free(resource->serial_no);
+	if (resource->topology) free(resource->topology);
+#endif
 
 	free(resource);
 }

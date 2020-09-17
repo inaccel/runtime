@@ -4,19 +4,28 @@
 /* CL resource struct (API Type). */
 typedef struct _cl_resource *cl_resource;
 
+enum resource_options {
+	NAME = 0,
+	POWER,
+	SERIAL_NO,
+	TEMPERATURE,
+	VENDOR,
+	VERSION
+};
+
 /**
  * Creates a resource object.
- * @param device_id The device associated with this resource.
+ * @param index The index associated with this resource.
  * @return The resource.
  */
-cl_resource create_resource(unsigned int device_id);
+cl_resource create_resource(unsigned int index);
 
 /**
  * Get specific information about a resource.
  * @param resource Refers to a valid resource object.
  * @return A "vendor | name | version" string.
  */
-char *get_resource_info(cl_resource resource);
+char *get_resource_info(cl_resource resource, enum resource_options option);
 
 /**
  * Loads the specified binary executable bits into the resource object.
@@ -33,18 +42,41 @@ int program_resource_with_binary(cl_resource resource, size_t length, const unsi
  */
 void release_resource(cl_resource resource);
 
+/* CL memory struct (API Type). */
+typedef struct _cl_memory *cl_memory;
+
+/**
+ * Creates a memory object.
+ * @param resource A valid resource used to create the memory object.
+ * @param index The index associated with this memory.
+ * @return The memory.
+ */
+cl_memory create_memory(cl_resource resource, unsigned int index);
+
+/**
+ * Get the size of a memory.
+ * @param memory Refers to a valid memory object.
+ * @return The size of the memory in bytes
+ */
+size_t get_memory_size(cl_memory memory);
+
+/**
+ * Deletes a memory object.
+ * @param memory Refers to a valid memory object.
+ */
+void release_memory(cl_memory memory);
+
 /* CL buffer struct (API Type). */
 typedef struct _cl_buffer *cl_buffer;
 
 /**
  * Creates a buffer object.
- * @param resource A valid resource used to create the buffer object.
+ * @param memory A valid memory used to create the buffer object.
  * @param size The size in bytes of the buffer memory object to be allocated.
  * @param host_ptr A pointer to the buffer data that should already be allocated by the application. The size of the buffer that address points to must be greater than or equal to the size bytes.
- * @param memory_id The memory associated with this buffer.
  * @return The buffer.
  */
-cl_buffer create_buffer(cl_resource resource, size_t size, void *host_ptr, unsigned int memory_id);
+cl_buffer create_buffer(cl_memory memory, size_t size, void *host_ptr);
 
 /**
  * Used to get information that is common to all buffer objects.
