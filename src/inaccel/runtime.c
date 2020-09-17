@@ -79,14 +79,14 @@ struct _cl_resource {
 	char *vendor;
 	char *version;
 
-	FILE *temperature;
+	char *temperature;
 #ifdef Intel
-	FILE *sdr;
-	FILE *sensors;
+	char *sdr;
+	char *sensors;
 	size_t mem_capacity;
 #endif
 #ifdef Xilinx
-	FILE *power;
+	char *power;
 	char *serial_no;
 	struct mem_topology *topology;
 #endif
@@ -100,19 +100,29 @@ char *intel_get_power(cl_resource resource) {
 	unsigned char reading;
 
 	if (resource->sdr && resource->sensors) {
-		if (fseek(resource->sdr, 24, SEEK_SET))
-			return NULL;
+		FILE *sdr_file = fopen(resource->sdr, "r");
+		FILE *sensors_file = fopen(resource->sensors, "r");
+
+		if (!sdr_file || !sensors_file)
+			return strdup("-");
+
+		if (fseek(sdr_file, 24, SEEK_SET))
+			return strdup("-");
 
 		int ret;
-		if(!(ret = fread(calc_params, sizeof(char), 6, resource->sdr)))
-			return NULL;
+		if(!(ret = fread(calc_params, sizeof(char), 6, sdr_file)))
+			return strdup("-");
 
-		if (fseek(resource->sensors, 4, SEEK_SET))
-			return NULL;
+		fclose(sdr_file);
+
+		if (fseek(sensors_file, 4, SEEK_SET))
+			return strdup("-");
 
 
-		if(!(ret = fread(&reading, sizeof(char), 1, resource->sensors)))
-			return NULL;
+		if(!(ret = fread(&reading, sizeof(char), 1, sensors_file)))
+			return strdup("-");
+
+		fclose(sensors_file);
 
 		int32_t B_val = ((calc_params[3] >> 6 & 0x3) << 8) | calc_params[2];
 		B_val = SIGN_EXT(B_val, 9);
@@ -458,17 +468,17 @@ cl_resource create_resource(unsigned int device_id) {
 
 	char path[PATH_MAX];
 	sprintf(path, "%s/%s", resource->root_path, "thermal_mgmt/temperature");
-	resource->temperature = fopen(path, "r");
+	resource->temperature = strdup(path);
 
 	sprintf(path, "%s/%s", resource->root_path, "avmmi-bmc.*.auto/bmc_info");
 
 	glob_t bmc;
 	if (!glob(path, GLOB_NOSORT, NULL, &bmc)) {
 		sprintf(path, "%s/%s", bmc.gl_pathv[0], "sdr");
-		resource->sdr = fopen(path, "r");
+		resource->sdr = strdup(path);
 
 		sprintf(path, "%s/%s", bmc.gl_pathv[0], "sensors");
-		resource->sensors = fopen(path, "r");
+		resource->sensors = strdup(path);
 
 		globfree(&bmc);
 	}
@@ -587,10 +597,10 @@ cl_resource create_resource(unsigned int device_id) {
 	glob_t xmc;
 	if (!glob(path, GLOB_NOSORT, NULL, &xmc)) {
 		sprintf(path, "%s/%s", xmc.gl_pathv[0], "xmc_fpga_temp");
-		resource->temperature = fopen(path, "r");
+		resource->temperature = strdup(path);
 
 		sprintf(path, "%s/%s", xmc.gl_pathv[0], "xmc_power");
-		resource->power = fopen(path, "r");
+		resource->power = strdup(path);
 
 
 		sprintf(path, "%s/%s", xmc.gl_pathv[0], "serial_num");
@@ -697,17 +707,24 @@ char *get_resource_info(cl_resource resource, enum resource_options option) {
 #endif
 #ifdef Xilinx
 			if (resource->power) {
-				char tmp[10] = {0};
-				if(fscanf(resource->power, "%s", tmp) != EOF) {
-					fseek(resource->power, 0, SEEK_SET);
-					// Power is obtained in uWatts so we convert it to Watts
-					size_t size = strlen(tmp);
-					float value = ((double) strtoul(tmp, NULL, 10)) / 1000000;
+				FILE *power_file = fopen(resource->power, "r");
 
-					char *power = (char *) malloc(size);
-					sprintf(power ,"%.2f", value);
+				if (power_file) {
+					char tmp[10] = {0};
 
-					return power;
+					int ret = fscanf(power_file, "%s", tmp);
+					fclose(power_file);
+
+					if(ret != EOF) {
+						// Power is obtained in uWatts so we convert it to Watts
+						size_t size = strlen(tmp);
+						float value = ((double) strtoul(tmp, NULL, 10)) / 1000000;
+
+						char *power = (char *) malloc(size);
+						sprintf(power ,"%.2f", value);
+
+						return power;
+					}
 				}
 			}
 
@@ -721,10 +738,17 @@ char *get_resource_info(cl_resource resource, enum resource_options option) {
 			return strdup("-");
 		case TEMPERATURE:
 			if (resource->temperature) {
-				char temperature[4] = {0};
-				if(fscanf(resource->temperature, "%s", temperature) != EOF) {
-					fseek(resource->temperature, 0, SEEK_SET);
-					return strdup(temperature);
+				FILE *temp_file = fopen(resource->temperature, "r");
+
+				if (temp_file) {
+					char temperature[4] = {0};
+
+					int ret = fscanf(temp_file, "%s", temperature);
+					fclose(temp_file);
+
+					if(ret != EOF) {
+						return strdup(temperature);
+					}
 				}
 			}
 
@@ -844,13 +868,13 @@ void release_resource(cl_resource resource) {
 	if (resource->vendor) free(resource->vendor);
 	if (resource->version) free(resource->version);
 
-	if (resource->temperature) fclose(resource->temperature);
+	if (resource->temperature) free(resource->temperature);
 #ifdef Intel
-	if (resource->sdr) fclose(resource->sdr);
-	if (resource->sensors) fclose(resource->sensors);
+	if (resource->sdr) free(resource->sdr);
+	if (resource->sensors) free(resource->sensors);
 #endif
 #ifdef Xilinx
-	if (resource->power) fclose(resource->power);
+	if (resource->power) free(resource->power);
 	if (resource->serial_no) free(resource->serial_no);
 	if (resource->topology) free(resource->topology);
 #endif
