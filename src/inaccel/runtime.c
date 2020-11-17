@@ -10,19 +10,6 @@
 #include "runtime.h"
 
 #ifdef Xilinx
-static const char *MEM_TYPE[] = {
-	"MEM_DDR3",
-	"MEM_DDR4",
-	"MEM_DRAM",
-	"MEM_STREAMING",
-	"MEM_PREALLOCATED_GLOB",
-	"MEM_ARE",
-	"MEM_HBM",
-	"MEM_BRAM",
-	"MEM_URAM",
-	"MEM_STREAMING_CONNECTION"
-};
-
 struct mem_data {
 	uint8_t m_type;          // enum corresponding to mem_type.
 	uint8_t m_used;          // if 0 this bank is not present
@@ -44,13 +31,14 @@ struct mem_topology {
 };
 #endif
 
-
 /* CL buffer struct (Type). */
 struct _cl_buffer {
-	cl_command_queue command_queue;
-	void *host_ptr;
-	cl_mem mem;
+#ifdef Intel
+	void *ptr;
 	size_t size;
+#endif
+	cl_command_queue command_queue;
+	cl_mem mem;
 };
 
 /* CL compute unit struct (Type). */
@@ -95,7 +83,7 @@ struct _cl_resource {
 #ifdef Intel
 #define SIGN_EXT(val, bitpos) (((val) ^ (1 << (bitpos))) - (1 << (bitpos)))
 
-char *intel_get_power(cl_resource resource) {
+float intel_get_power(cl_resource resource) {
 	unsigned char calc_params[6];
 	unsigned char reading;
 
@@ -104,23 +92,23 @@ char *intel_get_power(cl_resource resource) {
 		FILE *sensors_file = fopen(resource->sensors, "r");
 
 		if (!sdr_file || !sensors_file)
-			return strdup("-");
+			return -1.0f;
 
 		if (fseek(sdr_file, 24, SEEK_SET))
-			return strdup("-");
+			return -1.0f;
 
 		int ret;
 		if(!(ret = fread(calc_params, sizeof(char), 6, sdr_file)))
-			return strdup("-");
+			return -1.0f;
 
 		fclose(sdr_file);
 
 		if (fseek(sensors_file, 4, SEEK_SET))
-			return strdup("-");
+			return -1.0f;
 
 
 		if(!(ret = fread(&reading, sizeof(char), 1, sensors_file)))
-			return strdup("-");
+			return -1.0f;
 
 		fclose(sensors_file);
 
@@ -162,13 +150,10 @@ char *intel_get_power(cl_resource resource) {
 			}
 		}
 
-		char *power = (char *) malloc(7); // 000.00 + '\0' = 7 chars max
-		sprintf(power, "%.2f", (float) sensor_value);
-
-		return power;
+		return sensor_value;
 	}
 
-	return strdup("-");
+	return -1.0f;
 }
 #endif
 
@@ -197,7 +182,7 @@ int await_compute_unit_run(cl_compute_unit compute_unit) {
  */
 int copy_from_buffer(cl_buffer buffer) {
 #if Intel
-	return inclEnqueueReadBuffer(buffer->command_queue, buffer->mem, 0, buffer->size, buffer->host_ptr);
+	return inclEnqueueReadBuffer(buffer->command_queue, buffer->mem, 0, buffer->size, buffer->ptr);
 #endif
 #if Xilinx
 	return inclEnqueueMigrateMemObject(buffer->command_queue, buffer->mem, 1);
@@ -211,7 +196,7 @@ int copy_from_buffer(cl_buffer buffer) {
  */
 int copy_to_buffer(cl_buffer buffer) {
 #ifdef Intel
-	return inclEnqueueWriteBuffer(buffer->command_queue, buffer->mem, 0, buffer->size, buffer->host_ptr);
+	return inclEnqueueWriteBuffer(buffer->command_queue, buffer->mem, 0, buffer->size, buffer->ptr);
 #endif
 #ifdef Xilinx
 	return inclEnqueueMigrateMemObject(buffer->command_queue, buffer->mem, 0);
@@ -222,16 +207,16 @@ int copy_to_buffer(cl_buffer buffer) {
  * Creates a buffer object.
  * @param memory A valid memory used to create the buffer object.
  * @param size The size in bytes of the buffer memory object to be allocated.
- * @param host_ptr A pointer to the buffer data that should already be allocated by the application. The size of the buffer that address points to must be greater than or equal to the size bytes.
+ * @param array A pointer to the buffer data that should already be allocated by the application. The size of the buffer that address points to must be greater than or equal to the size bytes.
  * @return The buffer.
  */
-cl_buffer create_buffer(cl_memory memory, size_t size, void *host_ptr) {
+cl_buffer create_buffer(cl_memory memory, size_t size, void *array) {
 	cl_buffer buffer = (cl_buffer) calloc(1, sizeof(struct _cl_buffer));
 
-	buffer->size = size;
-	buffer->host_ptr = host_ptr;
-
 #ifdef Intel
+	buffer->size = size;
+	buffer->ptr = array;
+
 	cl_uint CL_MEMORY = memory->id << 16;
 
 	if (!(buffer->mem = inclCreateBuffer(memory->resource->context, CL_MEM_READ_WRITE | CL_MEMORY, size, NULL))) goto CATCH;
@@ -249,7 +234,7 @@ cl_buffer create_buffer(cl_memory memory, size_t size, void *host_ptr) {
 
 	cl_mem_ext_ptr_t ext_ptr;
 	ext_ptr.flags = CL_MEMORY;
-	ext_ptr.obj = host_ptr;
+	ext_ptr.obj = array;
 	ext_ptr.param = 0;
 
 	if (!(buffer->mem = inclCreateBuffer(memory->resource->context, CL_MEM_EXT_PTR | CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, size, &ext_ptr))) goto CATCH;
@@ -293,15 +278,11 @@ CATCH:
 cl_memory create_memory(cl_resource resource, unsigned int index) {
 #ifdef Intel
 	// Intel has only one memory (for now)
-	printf("trying to create memory with index: %u\n", index);
-	fflush(stdout);
 	if (!index) {
 #endif
 #ifdef Xilinx
 	if (resource->topology && (index < resource->topology->m_count)) {
 #endif
-		printf("creating memory with index: %u\n", index);
-		fflush(stdout);
 		cl_memory memory = (cl_memory) calloc(1, sizeof(struct _cl_memory));
 
 		memory->id = index;
@@ -640,31 +621,11 @@ cl_resource create_resource(unsigned int device_id) {
 	}
 	globfree(&icap);
 #endif
-	printf("Resource: %p\n", resource);
-	fflush(stdout);
 	return resource;
 CATCH:
 	free(resource);
 
 	return NULL;
-}
-
-/**
- * Used to get information that is common to all buffer objects.
- * @param buffer Specifies the buffer object being queried.
- * @return Return the host_ptr argument value specified when buffer is created.
- */
-void *get_buffer_host_ptr(cl_buffer buffer) {
-	return buffer->host_ptr;
-}
-
-/**
- * Used to get information that is common to all buffer objects.
- * @param buffer Specifies the buffer object being queried.
- * @return Return actual size of buffer in bytes.
- */
-size_t get_buffer_size(cl_buffer buffer) {
-	return buffer->size;
 }
 
 /**
@@ -678,7 +639,7 @@ size_t get_memory_size(cl_memory memory) {
 #endif
 #ifdef Xilinx
 	// Cross-check that the memory still exists in the topology
-	if (memory->id < memory->resource->topology->m_count) {
+	if (memory->resource->topology->m_mem_data[memory->id].m_used) {
 		return memory->resource->topology->m_mem_data[memory->id].m_size * 1024;
 	}
 
@@ -686,99 +647,153 @@ size_t get_memory_size(cl_memory memory) {
 #endif
 }
 
+
 /**
- * Get specific information about a resource.
- * @param resource Refers to a valid resource object.
- * @return A "vendor | name | version" string.
- */
-char *get_resource_info(cl_resource resource, enum resource_options option) {
-	printf("Requested resource info!\n");
-	fflush(stdout);
-
-	switch(option) {
-		case NAME:
-			if (resource->name)
-				return resource->name;
-			else
-				return strdup("-");
-		case POWER:
+* Get the type of a memory.
+* @param memory Refers to a valid memory object.
+* @return The memory type.
+*/
+char *get_memory_type(cl_memory memory) {
 #ifdef Intel
-			return intel_get_power(resource);
+	return strdup("DDR");
 #endif
 #ifdef Xilinx
-			if (resource->power) {
-				FILE *power_file = fopen(resource->power, "r");
+	if (memory->resource->topology) {
+		char *tag = (char *) malloc(strlen((const char *) memory->resource->topology->m_mem_data[memory->id].m_tag));
+		strcpy(tag, (const char *) memory->resource->topology->m_mem_data[memory->id].m_tag);
 
-				if (power_file) {
-					char tmp[10] = {0};
+		strtok(tag, "[");
 
-					int ret = fscanf(power_file, "%s", tmp);
-					fclose(power_file);
+		if (strcmp(tag, "bank0") && strcmp(tag, "bank1") && strcmp(tag, "bank2") && strcmp(tag, "bank3")) {
+			return tag;
+		} else{
+			free(tag);
+			return strdup("DDR");
+		}
 
-					if(ret != EOF) {
-						// Power is obtained in uWatts so we convert it to Watts
-						size_t size = strlen(tmp);
-						float value = ((double) strtoul(tmp, NULL, 10)) / 1000000;
-
-						char *power = (char *) malloc(size);
-						sprintf(power ,"%.2f", value);
-
-						return power;
-					}
-				}
-			}
-
-			return strdup("-");
-#endif
-		case SERIAL_NO:
-#ifdef Xilinx
-			if(resource->serial_no)
-				return resource->serial_no;
-#endif
-			return strdup("-");
-		case TEMPERATURE:
-			if (resource->temperature) {
-				FILE *temp_file = fopen(resource->temperature, "r");
-
-				if (temp_file) {
-					char temperature[4] = {0};
-
-					int ret = fscanf(temp_file, "%s", temperature);
-					fclose(temp_file);
-
-					if(ret != EOF) {
-						return strdup(temperature);
-					}
-				}
-			}
-
-			return strdup("-");
-		case VENDOR:
-			if (resource->vendor)
-				return resource->vendor;
-			else
-				return strdup("-");
-		case VERSION:
-			if (resource->version)
-				return resource->version;
-			else
-				return strdup("-");
+	} else {
+		return strdup("-");
 	}
+#endif
+}
+
+/**
+ * Get the name of a resource.
+ * @param resource Refers to a valid resource object.
+ * @return The name.
+ */
+char *get_resource_name(cl_resource resource) {
+	if (resource->name)
+		return resource->name;
+	else
+		return strdup("-");
+}
+
+/**
+ * Get the power consumption of a resource.
+ * @param resource Refers to a valid resource object.
+ * @return The power consumed.
+ */
+float get_resource_power(cl_resource resource) {
+#ifdef Intel
+	return intel_get_power(resource);
+#endif
+#ifdef Xilinx
+	if (resource->power) {
+		FILE *power_file = fopen(resource->power, "r");
+
+		if (power_file) {
+			char tmp[10] = {0};
+
+			int ret = fscanf(power_file, "%s", tmp);
+			fclose(power_file);
+
+			if(ret != EOF) {
+				// Power is obtained in uWatts so we convert it to Watts
+				float value = ((double) strtoul(tmp, NULL, 10)) / 1000000;
+
+				// Keep only 2 decimals
+				return value;
+			}
+		}
+	}
+
+	return -1.0f;
+#endif
+}
+
+/**
+ * Get the serial number of a resource.
+ * @param resource Refers to a valid resource object.
+ * @return The serial number.
+ */
+char *get_resource_serial_no(cl_resource resource) {
+#ifdef Xilinx
+	if(resource->serial_no)
+		return strdup(resource->serial_no);
+#endif
+	return strdup("-");
+}
+
+/**
+ * Get the current temperature of a resource.
+ * @param resource Refers to a valid resource object.
+ * @return The current temperature of the resource in degrees Celsius.
+ */
+float get_resource_temperature(cl_resource resource) {
+	if (resource->temperature) {
+		FILE *temp_file = fopen(resource->temperature, "r");
+
+		if (temp_file) {
+			char temperature[4] = {0};
+
+			int ret = fscanf(temp_file, "%s", temperature);
+			fclose(temp_file);
+
+			if(ret != EOF) {
+				return strtof(temperature, NULL);
+			}
+		}
+	}
+
+	return -1;
+}
+
+/**
+ * Get the vendor of a resource.
+ * @param resource Refers to a valid resource object.
+ * @return The vendor.
+ */
+char *get_resource_vendor(cl_resource resource) {
+	if (resource->vendor)
+		return resource->vendor;
+	else
+		return strdup("-");
+}
+
+/**
+ * Get the version (bsp/shell) of a resource.
+ * @param resource Refers to a valid resource object.
+ * @return The version.
+ */
+char *get_resource_version(cl_resource resource) {
+	if (resource->version)
+		return resource->version;
+	else
+		return strdup("-");
 }
 
 /**
  * Loads the specified binary executable bits into the resource object.
  * @param resource Refers to a valid resource object.
- * @param length The size in bytes of the binary to be loaded.
+ * @param size The size in bytes of the binary to be loaded.
  * @param binary Pointer to binary to be loaded. The binary specified contains the bits that describe the executable that will be run on the associated resource.
  * @return 0 on success; 1 on failure.
  */
-int program_resource_with_binary(cl_resource resource, size_t length, const unsigned char *binary) {
-	printf("Resource: %p, length: %lu, binary:%p\n", resource, length, binary);
-	fflush(stdout);
+int program_resource_with_binary(cl_resource resource, size_t size, const void *binary) {
 	if (resource->program) if (inclReleaseProgram(resource->program)) goto CATCH;
 
-	if (!(resource->program = inclCreateProgramWithBinary(resource->context, resource->device_id, length, binary))) goto CATCH;
+	if (!(resource->program = inclCreateProgramWithBinary(resource->context, resource->device_id, size, binary))) goto CATCH;
 
 	if (inclBuildProgram(resource->program)) goto CATCH;
 
@@ -899,7 +914,7 @@ int run_compute_unit(cl_compute_unit compute_unit) {
  * @param value A pointer to data that should be used for argument specified by index. If the argument is a buffer the value entry will be the appropriate object. The buffer object must be created with the resource associated with the compute unit object.
  * @return 0 on success; 1 on failure.
  */
-int set_compute_unit_arg(cl_compute_unit compute_unit, unsigned int index, size_t size, void *value) {
+int set_compute_unit_arg(cl_compute_unit compute_unit, unsigned int index, size_t size, const void *value) {
 	if (size) {
 		return inclSetKernelArg(compute_unit->kernel, index, size, value);
 	} else {

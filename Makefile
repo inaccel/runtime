@@ -7,7 +7,7 @@ OBJECTS = $(C_SRCS:.c=.o)
 OBJECTS += $(filter-out %.cpp, $(CXX_SRCS:.cc=.o))
 OBJECTS += $(filter-out %.cc, $(CXX_SRCS:.cpp=.o))
 
-FLAGS = -fPIC -O3
+FLAGS = -fPIC -O3 -Wall
 CFLAGS = $(FLAGS)
 CXXFLAGS = $(FLAGS)
 
