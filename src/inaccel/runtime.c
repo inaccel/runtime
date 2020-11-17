@@ -9,7 +9,6 @@
 #include "CL/opencl.h"
 #include "runtime.h"
 
-#ifdef Xilinx
 struct mem_data {
 	uint8_t m_type;          // enum corresponding to mem_type.
 	uint8_t m_used;          // if 0 this bank is not present
@@ -29,14 +28,9 @@ struct mem_topology {
 	int32_t m_count; //Number of mem_data
 	struct mem_data m_mem_data[1]; //Should be sorted on mem_type
 };
-#endif
 
 /* CL buffer struct (Type). */
 struct _cl_buffer {
-#ifdef Intel
-	void *ptr;
-	size_t size;
-#endif
 	cl_command_queue command_queue;
 	cl_mem mem;
 };
@@ -68,94 +62,10 @@ struct _cl_resource {
 	char *version;
 
 	char *temperature;
-#ifdef Intel
-	char *sdr;
-	char *sensors;
-	size_t mem_capacity;
-#endif
-#ifdef Xilinx
 	char *power;
 	char *serial_no;
 	struct mem_topology *topology;
-#endif
 };
-
-#ifdef Intel
-#define SIGN_EXT(val, bitpos) (((val) ^ (1 << (bitpos))) - (1 << (bitpos)))
-
-float intel_get_power(cl_resource resource) {
-	unsigned char calc_params[6];
-	unsigned char reading;
-
-	if (resource->sdr && resource->sensors) {
-		FILE *sdr_file = fopen(resource->sdr, "r");
-		FILE *sensors_file = fopen(resource->sensors, "r");
-
-		if (!sdr_file || !sensors_file)
-			return -1.0f;
-
-		if (fseek(sdr_file, 24, SEEK_SET))
-			return -1.0f;
-
-		int ret;
-		if(!(ret = fread(calc_params, sizeof(char), 6, sdr_file)))
-			return -1.0f;
-
-		fclose(sdr_file);
-
-		if (fseek(sensors_file, 4, SEEK_SET))
-			return -1.0f;
-
-
-		if(!(ret = fread(&reading, sizeof(char), 1, sensors_file)))
-			return -1.0f;
-
-		fclose(sensors_file);
-
-		int32_t B_val = ((calc_params[3] >> 6 & 0x3) << 8) | calc_params[2];
-		B_val = SIGN_EXT(B_val, 9);
-
-		int32_t M_val = ((calc_params[1] >> 6 & 0x3) << 8) | calc_params[0];
-		M_val = SIGN_EXT(M_val, 9);
-
-		int32_t R_exp = calc_params[5] >> 4 & 0x0F;
-		R_exp = SIGN_EXT(R_exp, 3);
-
-		int32_t B_exp = calc_params[5] & 0x0F;
-		B_exp = SIGN_EXT(B_exp, 3);
-
-		double M = M_val;
-		double B = B_val;
-
-		int i;
-		if (B_exp >= 0) {
-			for (i = 0; i < B_exp; i++) {
-				B *= 10.0;
-			}
-		} else {
-			for (i = B_exp; i; i++) {
-				B /= 10.0;
-			}
-		}
-
-		double sensor_value = M * reading + B;
-
-		if (R_exp >= 0) {
-			for (i = 0; i < R_exp; i++) {
-				sensor_value *= 10.0;
-			}
-		} else {
-			for (i = R_exp; i; i++) {
-				sensor_value /= 10.0;
-			}
-		}
-
-		return sensor_value;
-	}
-
-	return -1.0f;
-}
-#endif
 
 /**
  * Waits on the host thread until all previous copy commands are issued to the associated resource and have completed.
@@ -181,12 +91,8 @@ int await_compute_unit_run(cl_compute_unit compute_unit) {
  * @return 0 on success; 1 on failure.
  */
 int copy_from_buffer(cl_buffer buffer) {
-#if Intel
-	return inclEnqueueReadBuffer(buffer->command_queue, buffer->mem, 0, buffer->size, buffer->ptr);
-#endif
-#if Xilinx
 	return inclEnqueueMigrateMemObject(buffer->command_queue, buffer->mem, 1);
-#endif
+
 }
 
 /**
@@ -195,12 +101,7 @@ int copy_from_buffer(cl_buffer buffer) {
  * @return 0 on success; 1 on failure.
  */
 int copy_to_buffer(cl_buffer buffer) {
-#ifdef Intel
-	return inclEnqueueWriteBuffer(buffer->command_queue, buffer->mem, 0, buffer->size, buffer->ptr);
-#endif
-#ifdef Xilinx
 	return inclEnqueueMigrateMemObject(buffer->command_queue, buffer->mem, 0);
-#endif
 }
 
 /**
@@ -213,15 +114,6 @@ int copy_to_buffer(cl_buffer buffer) {
 cl_buffer create_buffer(cl_memory memory, size_t size, void *array) {
 	cl_buffer buffer = (cl_buffer) calloc(1, sizeof(struct _cl_buffer));
 
-#ifdef Intel
-	buffer->size = size;
-	buffer->ptr = array;
-
-	cl_uint CL_MEMORY = memory->id << 16;
-
-	if (!(buffer->mem = inclCreateBuffer(memory->resource->context, CL_MEM_READ_WRITE | CL_MEMORY, size, NULL))) goto CATCH;
-#endif
-#ifdef Xilinx
 	cl_uint CL_MEM_EXT_PTR = 1 << 31;
 
 	typedef struct{
@@ -238,7 +130,6 @@ cl_buffer create_buffer(cl_memory memory, size_t size, void *array) {
 	ext_ptr.param = 0;
 
 	if (!(buffer->mem = inclCreateBuffer(memory->resource->context, CL_MEM_EXT_PTR | CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, size, &ext_ptr))) goto CATCH;
-#endif
 
 	if (!(buffer->command_queue = inclCreateCommandQueue(memory->resource->context, memory->resource->device_id))) goto CATCH;
 
@@ -276,13 +167,7 @@ CATCH:
  * @return The memory.
  */
 cl_memory create_memory(cl_resource resource, unsigned int index) {
-#ifdef Intel
-	// Intel has only one memory (for now)
-	if (!index) {
-#endif
-#ifdef Xilinx
 	if (resource->topology && (index < resource->topology->m_count)) {
-#endif
 		cl_memory memory = (cl_memory) calloc(1, sizeof(struct _cl_memory));
 
 		memory->id = index;
@@ -302,169 +187,6 @@ cl_memory create_memory(cl_resource resource, unsigned int index) {
 cl_resource create_resource(unsigned int device_id) {
 	cl_resource resource = (cl_resource) calloc(1, sizeof(struct _cl_resource));
 
-#ifdef Intel
-	resource->vendor = strdup("intel");
-	if (!(resource->platform_id = inclGetPlatformID("Intel"))) goto CATCH;
-
-	if (!(resource->device_id = inclGetDeviceID(resource->platform_id, device_id))) goto CATCH;
-
-	if (!(resource->context = inclCreateContext(resource->device_id))) goto CATCH;
-
-	cl_ulong mem_capacity;
-	inclGetDeviceInfo(resource->device_id, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(mem_capacity), &mem_capacity, NULL);
-	// mem_capacity is returned into MiB, so we convert it to bytes
-	resource->mem_capacity = mem_capacity;
-
-	size_t raw_name_size;
-	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, 0, NULL, &raw_name_size);
-
-	char *raw_name = (char *) malloc(raw_name_size * sizeof(char));
-	if (!raw_name) {
-		fprintf(stderr, "Error: malloc\n");
-		return resource;
-	}
-
-	memset(raw_name, 0, raw_name_size * sizeof(char));
-
-	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, raw_name_size, raw_name, NULL);
-
-	char *name = (char *) malloc(raw_name_size * sizeof(char));
-	if (!name) {
-		free(raw_name);
-		fprintf(stderr, "Error: malloc\n");
-		return resource;
-	}
-
-	memset(name, 0, raw_name_size * sizeof(char));
-
-	const char *regex = "^([^ : ]+) : .*_(..)0000(.).$";
-
-	regex_t compile;
-	regmatch_t group[4];
-
-	if (regcomp(&compile, regex, REG_EXTENDED)) {
-		free(raw_name);
-		free(name);
-		fprintf(stderr, "Error: regcomp\n");
-		return resource;
-	}
-
-	long int major, minor;
-
-	if (!regexec(&compile, raw_name, 4, group, 0)) {
-		strncpy(name, raw_name + group[1].rm_so, group[1].rm_eo - group[1].rm_so);
-		resource->name = name;
-
-		char *tmp;
-
-		tmp = strndup(raw_name + group[2].rm_so, group[2].rm_eo - group[2].rm_so);
-		if (!tmp) {
-			free(raw_name);
-			fprintf(stderr, "Error: strndup\n");
-			return resource;
-		}
-		major = strtol(tmp, NULL, 16);
-		free(tmp);
-
-		tmp = strndup(raw_name + group[3].rm_so, group[3].rm_eo - group[3].rm_so);
-		if (!tmp) {
-			free(raw_name);
-			fprintf(stderr, "Error: strndup\n");
-			return resource;
-		}
-		minor = strtol(tmp, NULL, 16);
-		free(tmp);
-	} else {
-		free(raw_name);
-		fprintf(stderr, "Error: regexec\n");
-		return resource;
-	}
-
-	regfree(&compile);
-
-	free(raw_name);
-
-	size_t UUID = 32;
-
-	char *version = (char *) malloc((UUID + 1) * sizeof(char));
-	if (!version) {
-		fprintf(stderr, "Error: malloc\n");
-		return resource;
-	}
-
-	memset(version, 0, (UUID + 1) * sizeof(char));
-
-	glob_t dev;
-	if (!glob("/sys/devices/pci*/*/{,/*}/fpga/intel-fpga-dev.*/intel-fpga-port.*/dev", GLOB_NOSORT | GLOB_BRACE, NULL, &dev)) {
-		size_t i;
-		for (i = 0; i < dev.gl_pathc; i++) {
-			long int dev_major;
-			long int dev_minor;
-
-			FILE *dev_file = fopen(dev.gl_pathv[i], "r");
-			if (!dev_file) {
-				continue;
-			}
-			if (fscanf(dev_file, "%ld:%ld", &dev_major, &dev_minor) == EOF) {
-				continue;
-			}
-			if (fclose(dev_file) == EOF) {
-				continue;
-			}
-
-			if ((major == dev_major) && (minor == dev_minor)) {
-				char path[PATH_MAX];
-				sprintf(path, "%s/intel-fpga-fme.*/pr/interface_id", dirname(dirname(dev.gl_pathv[i])));
-
-				glob_t interface_id;
-				if (!glob(path, GLOB_NOSORT, NULL, &interface_id)) {
-					FILE *interface_id_file = fopen(interface_id.gl_pathv[0], "r");
-					if (!interface_id_file) {
-						continue;
-					}
-					if (!fgets(version, UUID + 1, interface_id_file)) {
-						continue;
-					}
-					if (fclose(interface_id_file) == EOF) {
-						continue;
-					}
-
-					resource->root_path = strdup(dirname(dirname(interface_id.gl_pathv[0])));
-
-					globfree(&interface_id);
-				}
-
-				break;
-			}
-		}
-		globfree(&dev);
-	}
-
-	if (!strlen(version)) {
-		free(version);
-		fprintf(stderr, "Error: strlen\n");
-		return resource;
-	}
-	resource->version = version;
-
-	char path[PATH_MAX];
-	sprintf(path, "%s/%s", resource->root_path, "thermal_mgmt/temperature");
-	resource->temperature = strdup(path);
-
-	sprintf(path, "%s/%s", resource->root_path, "avmmi-bmc.*.auto/bmc_info");
-
-	glob_t bmc;
-	if (!glob(path, GLOB_NOSORT, NULL, &bmc)) {
-		sprintf(path, "%s/%s", bmc.gl_pathv[0], "sdr");
-		resource->sdr = strdup(path);
-
-		sprintf(path, "%s/%s", bmc.gl_pathv[0], "sensors");
-		resource->sensors = strdup(path);
-
-		globfree(&bmc);
-	}
-#endif
-#ifdef Xilinx
 	resource->vendor = strdup("xilinx");
 
 	if (!(resource->platform_id = inclGetPlatformID("Xilinx"))) goto CATCH;
@@ -620,7 +342,7 @@ cl_resource create_resource(unsigned int device_id) {
 		}
 	}
 	globfree(&icap);
-#endif
+
 	return resource;
 CATCH:
 	free(resource);
@@ -634,17 +356,12 @@ CATCH:
  * @return The size of the memory in bytes
  */
 size_t get_memory_size(cl_memory memory) {
-#ifdef Intel
-	return memory->resource->mem_capacity;
-#endif
-#ifdef Xilinx
 	// Cross-check that the memory still exists in the topology
 	if (memory->resource->topology->m_mem_data[memory->id].m_used) {
 		return memory->resource->topology->m_mem_data[memory->id].m_size * 1024;
 	}
 
 	return 0;
-#endif
 }
 
 
@@ -654,10 +371,6 @@ size_t get_memory_size(cl_memory memory) {
 * @return The memory type.
 */
 char *get_memory_type(cl_memory memory) {
-#ifdef Intel
-	return strdup("DDR");
-#endif
-#ifdef Xilinx
 	if (memory->resource->topology) {
 		char *tag = (char *) malloc(strlen((const char *) memory->resource->topology->m_mem_data[memory->id].m_tag));
 		strcpy(tag, (const char *) memory->resource->topology->m_mem_data[memory->id].m_tag);
@@ -674,7 +387,6 @@ char *get_memory_type(cl_memory memory) {
 	} else {
 		return strdup("-");
 	}
-#endif
 }
 
 /**
@@ -695,10 +407,6 @@ char *get_resource_name(cl_resource resource) {
  * @return The power consumed.
  */
 float get_resource_power(cl_resource resource) {
-#ifdef Intel
-	return intel_get_power(resource);
-#endif
-#ifdef Xilinx
 	if (resource->power) {
 		FILE *power_file = fopen(resource->power, "r");
 
@@ -719,7 +427,6 @@ float get_resource_power(cl_resource resource) {
 	}
 
 	return -1.0f;
-#endif
 }
 
 /**
@@ -728,10 +435,9 @@ float get_resource_power(cl_resource resource) {
  * @return The serial number.
  */
 char *get_resource_serial_no(cl_resource resource) {
-#ifdef Xilinx
 	if(resource->serial_no)
 		return strdup(resource->serial_no);
-#endif
+
 	return strdup("-");
 }
 
@@ -797,11 +503,6 @@ int program_resource_with_binary(cl_resource resource, size_t size, const void *
 
 	if (inclBuildProgram(resource->program)) goto CATCH;
 
-#ifdef Intel
-	return EXIT_SUCCESS;
-#endif
-// In Intel the mem_topology remains unchangeable
-#ifdef Xilinx
 	// mem_topology changes every time we program the device
 	if (resource->topology) free(resource->topology);
 
@@ -831,7 +532,6 @@ int program_resource_with_binary(cl_resource resource, size_t size, const void *
 			}
 		}
 	}
-#endif
 
 CATCH:
 	return EXIT_FAILURE;
@@ -884,15 +584,9 @@ void release_resource(cl_resource resource) {
 	if (resource->version) free(resource->version);
 
 	if (resource->temperature) free(resource->temperature);
-#ifdef Intel
-	if (resource->sdr) free(resource->sdr);
-	if (resource->sensors) free(resource->sensors);
-#endif
-#ifdef Xilinx
 	if (resource->power) free(resource->power);
 	if (resource->serial_no) free(resource->serial_no);
 	if (resource->topology) free(resource->topology);
-#endif
 
 	free(resource);
 }
