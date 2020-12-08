@@ -12,6 +12,8 @@
 #include "CL/cl_ext_xilinx.h"
 #include "xrt/xclhal2.h"
 
+#define RESOURCE_DEVICES 2
+
 #define ARP_DISCOVERY 0x5500
 #define ARP_IP_ADDR_OFFSET 0x5000
 #define ARP_MAC_ADDR_OFFSET 0x4800
@@ -237,13 +239,11 @@ cl_resource create_resource(unsigned int device_id) {
 
 	if (!(resource->platform_id = inclGetPlatformID("Xilinx"))) goto CATCH;
 
-	if (!(resource->device_id[0] = inclGetDeviceID(resource->platform_id, 2 * device_id))) goto CATCH;
+	for (int i = 0; i < RESOURCE_DEVICES; i++) {
+		if (!(resource->device_id[i] = inclGetDeviceID(resource->platform_id, 2 * device_id + i))) goto CATCH;
 
-	if (!(resource->device_id[1] = inclGetDeviceID(resource->platform_id, 2 * device_id + 1))) goto CATCH;
-
-	if (!(resource->context[0] = inclCreateContext(resource->device_id[0]))) goto CATCH;
-
-	if (!(resource->context[1] = inclCreateContext(resource->device_id[1]))) goto CATCH;
+		if (!(resource->context[i] = inclCreateContext(resource->device_id[i]))) goto CATCH;
+	}
 
 	size_t raw_name_size;
 	inclGetDeviceInfo(resource->device_id[0], CL_DEVICE_NAME, 0, NULL, &raw_name_size);
@@ -316,8 +316,7 @@ cl_resource create_resource(unsigned int device_id) {
 	unsigned idx = 0;
 
 	if (!glob("/sys/bus/pci/drivers/{xocl,xuser}/*:*:*.*", GLOB_BRACE, NULL, &dev)) {
-		size_t i;
-		for (i = dev.gl_pathc; i > 0; i--) {
+		for (int i = dev.gl_pathc; i > 0; i--) {
 			char temp_dev[PATH_MAX / 2] = {0};
 			if (readlink(dev.gl_pathv[i - 1], temp_dev, sizeof(temp_dev) - 1) == 1)
 				return resource;
@@ -351,105 +350,56 @@ cl_resource create_resource(unsigned int device_id) {
 
 	globfree(&dev);
 
-	char path_0[PATH_MAX];
-	sprintf(path_0, "%s/xmc.*", resource->root_path[0]);
+	for (int i = 0; i < RESOURCE_DEVICES; i++) {
+		char path[PATH_MAX];
+		sprintf(path, "%s/xmc.*", resource->root_path[i]);
 
-	glob_t xmc_0;
-	if (!glob(path_0, GLOB_NOSORT, NULL, &xmc_0)) {
-		sprintf(path_0, "%s/%s", xmc_0.gl_pathv[0], "xmc_fpga_temp");
-		resource->temperature[0] = strdup(path_0);
+		glob_t xmc;
+		if (!glob(path, GLOB_NOSORT, NULL, &xmc)) {
+			sprintf(path, "%s/%s", xmc.gl_pathv[0], "xmc_fpga_temp");
+			resource->temperature[i] = strdup(path);
 
-		sprintf(path_0, "%s/%s", xmc_0.gl_pathv[0], "xmc_power");
-		resource->power[0] = strdup(path_0);
+			sprintf(path, "%s/%s", xmc.gl_pathv[0], "xmc_power");
+			resource->power[i] = strdup(path);
 
 
-		sprintf(path_0, "%s/%s", xmc_0.gl_pathv[0], "serial_num");
-		FILE *serial = fopen(path_0, "r");
-		if (serial) {
-			char serial_no[50];
-			serial_no[0] = '\0';
+			sprintf(path, "%s/%s", xmc.gl_pathv[0], "serial_num");
+			FILE *serial = fopen(path, "r");
+			if (serial) {
+				char serial_no[50];
+				serial_no[0] = '\0';
 
-			if (fscanf(serial,"%s", serial_no)) {
-				resource->serial_no[0] = strdup(serial_no);
-			}
+				if (fscanf(serial,"%s", serial_no)) {
+					resource->serial_no[i] = strdup(serial_no);
+				}
 
-			fclose(serial);
-		}
-	}
-	globfree(&xmc_0);
-
-	sprintf(path_0, "%s/icap.*", resource->root_path[0]);
-
-	glob_t icap_0;
-	if (!glob(path_0, GLOB_NOSORT, NULL, &icap_0)) {
-		sprintf(path_0, "%s/%s", icap_0.gl_pathv[0], "mem_topology");
-
-		FILE *mem_topology = fopen(path_0, "r");
-		if (mem_topology) {
-			//PATH_MAX bytes should be sufficient for mem_topology
-			char *topology = (char *) malloc(PATH_MAX);
-			size_t topology_bytes = fread(topology, sizeof(char), PATH_MAX, mem_topology);
-
-			fclose(mem_topology);
-
-			if (!topology_bytes)
-				free(topology);
-			else {
-				resource->topology[0] = (struct mem_topology *) topology;
+				fclose(serial);
 			}
 		}
-	}
-	globfree(&icap_0);
+		globfree(&xmc);
 
-	char path_1[PATH_MAX];
-	sprintf(path_1, "%s/xmc.*", resource->root_path[1]);
+		sprintf(path, "%s/icap.*", resource->root_path[i]);
 
-	glob_t xmc_1;
-	if (!glob(path_1, GLOB_NOSORT, NULL, &xmc_1)) {
-		sprintf(path_1, "%s/%s", xmc_1.gl_pathv[0], "xmc_fpga_temp");
-		resource->temperature[1] = strdup(path_1);
+		glob_t icap;
+		if (!glob(path, GLOB_NOSORT, NULL, &icap)) {
+			sprintf(path, "%s/%s", icap.gl_pathv[0], "mem_topology");
 
-		sprintf(path_1, "%s/%s", xmc_1.gl_pathv[0], "xmc_power");
-		resource->power[1] = strdup(path_1);
+			FILE *mem_topology = fopen(path, "r");
+			if (mem_topology) {
+				//PATH_MAX bytes should be sufficient for mem_topology
+				char *topology = (char *) malloc(PATH_MAX);
+				size_t topology_bytes = fread(topology, sizeof(char), PATH_MAX, mem_topology);
 
+				fclose(mem_topology);
 
-		sprintf(path_1, "%s/%s", xmc_1.gl_pathv[0], "serial_num");
-		FILE *serial = fopen(path_1, "r");
-		if (serial) {
-			char serial_no[50];
-			serial_no[0] = '\0';
-
-			if (fscanf(serial,"%s", serial_no)) {
-				resource->serial_no[1] = strdup(serial_no);
-			}
-
-			fclose(serial);
-		}
-	}
-	globfree(&xmc_1);
-
-	sprintf(path_1, "%s/icap.*", resource->root_path[1]);
-
-	glob_t icap_1;
-	if (!glob(path_1, GLOB_NOSORT, NULL, &icap_1)) {
-		sprintf(path_1, "%s/%s", icap_1.gl_pathv[0], "mem_topology");
-
-		FILE *mem_topology = fopen(path_1, "r");
-		if (mem_topology) {
-			//PATH_MAX bytes should be sufficient for mem_topology
-			char *topology = (char *) malloc(PATH_MAX);
-			size_t topology_bytes = fread(topology, sizeof(char), PATH_MAX, mem_topology);
-
-			fclose(mem_topology);
-
-			if (!topology_bytes)
-				free(topology);
-			else {
-				resource->topology[1] = (struct mem_topology *) topology;
+				if (!topology_bytes) free(topology);
+				else {
+					resource->topology[i] = (struct mem_topology *) topology;
+				}
 			}
 		}
+		globfree(&icap);
 	}
-	globfree(&icap_1);
 
 	return resource;
 CATCH:
@@ -517,37 +467,22 @@ char *get_resource_name(cl_resource resource) {
 float get_resource_power(cl_resource resource) {
 	float value = 0;
 
-	if (resource->power[0]) {
-		FILE *power_file = fopen(resource->power[0], "r");
+	for (int i = 0; i < RESOURCE_DEVICES; i++) {
+		if (resource->power[i]) {
+			FILE *power_file = fopen(resource->power[i], "r");
 
-		if (power_file) {
-			char tmp[10] = {0};
+			if (power_file) {
+				char tmp[10] = {0};
 
-			int ret = fscanf(power_file, "%s", tmp);
-			fclose(power_file);
+				int ret = fscanf(power_file, "%s", tmp);
+				fclose(power_file);
 
-			if(ret != EOF) {
-				// Power is obtained in uWatts so we convert it to Watts
-				value += ((double) strtoul(tmp, NULL, 10)) / 1000000;
+				if(ret != EOF) {
+					// Power is obtained in uWatts so we convert it to Watts
+					value += ((double) strtoul(tmp, NULL, 10)) / 1000000;
+				}
 			}
 		}
-	}
-
-	if (resource->power[1]) {
-		FILE *power_file = fopen(resource->power[1], "r");
-
-		if (power_file) {
-			char tmp[10] = {0};
-
-			int ret = fscanf(power_file, "%s", tmp);
-			fclose(power_file);
-
-			if(ret != EOF) {
-				// Power is obtained in uWatts so we convert it to Watts
-				value += ((double) strtoul(tmp, NULL, 10)) / 1000000;
-			}
-		}
-
 	}
 
 	return value;
@@ -593,32 +528,19 @@ char *get_resource_serial_no(cl_resource resource) {
 float get_resource_temperature(cl_resource resource) {
 	float value = 0;
 
-	if (resource->temperature[0]) {
-		FILE *temp_file = fopen(resource->temperature[0], "r");
+	for (int i = 0; i < RESOURCE_DEVICES; i++) {
+		if (resource->temperature[i]) {
+			FILE *temp_file = fopen(resource->temperature[i], "r");
 
-		if (temp_file) {
-			char temperature[4] = {0};
+			if (temp_file) {
+				char temperature[4] = {0};
 
-			int ret = fscanf(temp_file, "%s", temperature);
-			fclose(temp_file);
+				int ret = fscanf(temp_file, "%s", temperature);
+				fclose(temp_file);
 
-			if(ret != EOF) {
-				value += strtof(temperature, NULL);
-			}
-		}
-	}
-
-	if (resource->temperature[1]) {
-		FILE *temp_file = fopen(resource->temperature[1], "r");
-
-		if (temp_file) {
-			char temperature[4] = {0};
-
-			int ret = fscanf(temp_file, "%s", temperature);
-			fclose(temp_file);
-
-			if(ret != EOF) {
-				value += strtof(temperature, NULL);
+				if(ret != EOF) {
+					value += strtof(temperature, NULL);
+				}
 			}
 		}
 	}
@@ -650,7 +572,6 @@ char *get_resource_version(cl_resource resource) {
 		return strdup("-");
 }
 
-
 inline void uuid_copy(xuid_t dst, const xuid_t src) {
 	memcpy(dst, src, sizeof(xuid_t));
 }
@@ -678,7 +599,7 @@ int network_setup(cl_resource resource) {
 	sockets[1][0].myPort = 50000;
 	sockets[1][0].valid = true;
 
-	for (int i = 0; i < 2; i++) {
+	for (int i = 0; i < RESOURCE_DEVICES; i++) {
 		if (!(resource->cmac[i] = inclCreateKernel(resource->program[i], "cmac_1"))) return 1;
 		if (!(resource->networklayer[i] = inclCreateKernel(resource->program[i], "networklayer"))) return 1;
 
@@ -818,20 +739,18 @@ int network_setup(cl_resource resource) {
  * @return 0 on success; 1 on failure.
  */
 int program_resource_with_binary(cl_resource resource, size_t size, const void *tar) {
-	if (resource->cmac[0]) if (inclReleaseKernel(resource->cmac[0])) goto CATCH;
-	if (resource->cmac[1]) if (inclReleaseKernel(resource->cmac[1])) goto CATCH;
-	if (resource->networklayer[0]) if (inclReleaseKernel(resource->networklayer[0])) goto CATCH;
-	if (resource->networklayer[1]) if (inclReleaseKernel(resource->networklayer[1])) goto CATCH;
+	for (int i = 0; i < RESOURCE_DEVICES; i++) {
+		if (resource->cmac[i]) if (inclReleaseKernel(resource->cmac[i])) goto CATCH;
+		if (resource->networklayer[i]) if (inclReleaseKernel(resource->networklayer[i])) goto CATCH;
 
-	if (resource->program[0]) if (inclReleaseProgram(resource->program[0])) goto CATCH;
-	if (resource->program[1]) if (inclReleaseProgram(resource->program[1])) goto CATCH;
+		if (resource->program[i]) if (inclReleaseProgram(resource->program[i])) goto CATCH;
 
-	if (resource->binary_name[0]) free(resource->binary_name[0]);
-	if (resource->binary_name[1]) free(resource->binary_name[1]);
+		if (resource->binary_name[i]) free(resource->binary_name[i]);
+	}
 
 	unsigned int offset = 0;
 
-	for (int i = 0; i < 2; i++) {
+	for (int i = 0; i < RESOURCE_DEVICES; i++) {
 		if (offset >= size) goto CATCH;
 
 		resource->binary_name[i] = strdup(tar + offset);
@@ -937,7 +856,7 @@ void release_resource(cl_resource resource) {
 	if (resource->vendor) free(resource->vendor);
 	if (resource->version) free(resource->version);
 
-	for (int i = 0; i < 2; i++) {
+	for (int i = 0; i < RESOURCE_DEVICES; i++) {
 		if(resource->binary_name[i]) free(resource->binary_name[i]);
 		if (resource->cmac[i]) inclReleaseKernel(resource->cmac[i]);
 		if (resource->networklayer[i]) inclReleaseKernel(resource->networklayer[i]);
