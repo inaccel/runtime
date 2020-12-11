@@ -600,8 +600,8 @@ int network_setup(cl_resource resource) {
 	sockets[1][0].valid = true;
 
 	for (int i = 0; i < RESOURCE_DEVICES; i++) {
-		if (!(resource->cmac[i] = inclCreateKernel(resource->program[i], "cmac_1"))) return 1;
-		if (!(resource->networklayer[i] = inclCreateKernel(resource->program[i], "networklayer"))) return 1;
+		if (!(resource->cmac[i] = inclCreateKernel(resource->program[i], "cmac_1"))) return 0;
+		if (!(resource->networklayer[i] = inclCreateKernel(resource->program[i], "networklayer"))) return 0;
 
 		xclGetComputeUnitInfo(resource->cmac[i], 0, XCL_COMPUTE_UNIT_INDEX, sizeof(cmac_idx[i]), &(cmac_idx[i]), NULL);
 
