@@ -49,7 +49,6 @@ struct _cl_compute_unit {
 /* CL memory struct (Type). */
 struct _cl_memory {
 	unsigned int index;
-	unsigned int id;
 	cl_resource resource;
 };
 
@@ -145,16 +144,27 @@ cl_buffer create_buffer(cl_memory memory, size_t size, void *array) {
 		void *param;
 	} cl_mem_ext_ptr_t;
 
-	cl_uint CL_MEMORY = memory->id | (1 << 31);
+	unsigned memory_id;
+	unsigned memory_device;
+
+	if (memory->index < memory->resource->topology[0]->m_count) {
+		memory_id = memory->index;
+		memory_device = 0;
+	} else {
+		memory_id = memory->index - memory->resource->topology[0]->m_count;
+		memory_device = 1;
+	}
+
+	cl_uint CL_MEMORY = memory_id | (1 << 31);
 
 	cl_mem_ext_ptr_t ext_ptr;
 	ext_ptr.flags = CL_MEMORY;
 	ext_ptr.obj = array;
 	ext_ptr.param = 0;
 
-	if (!(buffer->mem = inclCreateBuffer(memory->resource->context[memory->index], CL_MEM_EXT_PTR | CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, size, &ext_ptr))) goto CATCH;
+	if (!(buffer->mem = inclCreateBuffer(memory->resource->context[memory_device], CL_MEM_EXT_PTR | CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, size, &ext_ptr))) goto CATCH;
 
-	if (!(buffer->command_queue = inclCreateCommandQueue(memory->resource->context[memory->index], memory->resource->device_id[memory->index]))) goto CATCH;
+	if (!(buffer->command_queue = inclCreateCommandQueue(memory->resource->context[memory_device], memory->resource->device_id[memory_device]))) goto CATCH;
 
 	return buffer;
 CATCH:
@@ -211,15 +221,7 @@ cl_memory create_memory(cl_resource resource, unsigned int index) {
 		cl_memory memory = (cl_memory) calloc(1, sizeof(struct _cl_memory));
 
 		memory->resource = resource;
-
-		if (index < resource->topology[0]->m_count) {
-			memory->index = 0;
-			memory->id = index;
-		}
-		else {
-			memory->index = 1;
-			memory->id = index - resource->topology[0]->m_count;
-		}
+		memory->index = index;
 
 		return memory;
 	}
@@ -414,10 +416,25 @@ CATCH:
  * @return The size of the memory in bytes
  */
 size_t get_memory_size(cl_memory memory) {
-	// Cross-check that the memory still exists in the topology
-	if (memory->resource->topology[memory->index]->m_mem_data[memory->id].m_used) {
-		return memory->resource->topology[memory->index]->m_mem_data[memory->id].m_size * 1024;
+	unsigned memory_id;
+	unsigned memory_device;
+
+	if (memory->index < memory->resource->topology[0]->m_count) {
+		memory_id = memory->index;
+		memory_device = 0;
+	} else {
+		memory_id = memory->index - memory->resource->topology[0]->m_count;
+		memory_device = 1;
 	}
+
+	// Cross-check that the memory still exists in the topology
+	if (memory->resource->topology[memory_device]->m_mem_data[memory_id].m_used) {
+		// printf("Memory[%d] size %lu\n", memory_id, memory->resource->topology[memory_device]->m_mem_data[memory_id].m_size * 1024);
+		// fflush(stdout);
+		return memory->resource->topology[memory_device]->m_mem_data[memory_id].m_size * 1024;
+	}
+	// printf("Nemory[%d] not used!\n", memory_id);
+	// fflush(stdout);
 
 	return 0;
 }
@@ -429,9 +446,20 @@ size_t get_memory_size(cl_memory memory) {
 * @return The memory type.
 */
 char *get_memory_type(cl_memory memory) {
-	if (memory->resource->topology[memory->index]) {
-		char *tag = (char *) malloc(strlen((const char *) memory->resource->topology[memory->index]->m_mem_data[memory->id].m_tag));
-		strcpy(tag, (const char *) memory->resource->topology[memory->index]->m_mem_data[memory->id].m_tag);
+	unsigned memory_id;
+	unsigned memory_device;
+
+	if (memory->index < memory->resource->topology[0]->m_count) {
+		memory_id = memory->index;
+		memory_device = 0;
+	} else {
+		memory_id = memory->index - memory->resource->topology[0]->m_count;
+		memory_device = 1;
+	}
+
+	if (memory->resource->topology[memory_device]) {
+		char *tag = (char *) malloc(strlen((const char *) memory->resource->topology[memory_device]->m_mem_data[memory_id].m_tag));
+		strcpy(tag, (const char *) memory->resource->topology[memory_device]->m_mem_data[memory_id].m_tag);
 
 		strtok(tag, "[");
 
