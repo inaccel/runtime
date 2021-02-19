@@ -4,8 +4,8 @@ This repository contains a custom runtime imlpementation for the Xilinx FINN MP 
 To build the custom runtime just **clone** the repository and use the **Makefile** provided to generate the output shared library.
 
 ``` bash
-https://github.com/inaccel/runtime.git -b Xilinx-MP
-make libXilinx-MP.so CPPFLAGS="-DXilinx -Iinclude -Iinclude/xrt -IOpenCL-Headers"
+git clone https://github.com/inaccel/runtime.git -b Xilinx-MP
+cd runtime && make libXilinx-MP.so CPPFLAGS="-DXilinx -Iinclude -Iinclude/xrt -IOpenCL-Headers"
 ```
 
 ## InAccel vended FINN accelerators
@@ -55,8 +55,8 @@ pip3 install inaccel-keras
 **Build** the custom runtime, move the generated shared library file under `/etc/inaccel/runtimes` and finally edit `etc/inaccel/coral.json` file, with an editor of your choice, so that **libXilinx-MP.so** is used rather than the default libXilinx.so .
 
 ``` bash
-https://github.com/inaccel/runtime.git -b Xilinx-MP
-make libXilinx-MP.so CPPFLAGS="-DXilinx -Iinclude -Iinclude/xrt -IOpenCL-Headers"
+git clone https://github.com/inaccel/runtime.git -b Xilinx-MP
+cd runtime && make libXilinx-MP.so CPPFLAGS="-DXilinx -Iinclude -Iinclude/xrt -IOpenCL-Headers"
 sudo mv libXilinx-MP.so /etc/inaccel/runtimes
 sudo nano /etc/inaccel/coral.json #change libXilinx.so to libXilinx-MP.so
 ```
@@ -98,11 +98,9 @@ wget https://github.com/inaccel/keras/raw/master/examples/data/elephant.jpg
 
 	dog = load_img('dog.jpg', target_size=(224, 224))
 	dog = np.expand_dims(dog, axis=0)
-	print(dog.shape)
 
 	elephant = load_img('elephant.jpg', target_size=(224, 224))
 	elephant = np.expand_dims(elephant, axis=0)
-	print(elephant.shape)
 
 	images = np.vstack([dog, elephant])
 
@@ -129,15 +127,49 @@ wget https://github.com/inaccel/keras/raw/master/examples/data/elephant.jpg
 
 	dog = load_img('dog.jpg', target_size=(224, 224))
 	dog = np.expand_dims(dog, axis=0)
-	print(dog.shape)
 
 	elephant = load_img('elephant.jpg', target_size=(224, 224))
 	elephant = np.expand_dims(elephant, axis=0)
-	print(elephant.shape)
 
-	images = np.vstack([car, dog, elephant])
+	images = np.vstack([dog, elephant])
 
 	preds = model.predict(images)
 
 	print('Predictions:', decode_predictions(preds, top=5))
+	```
+
+### MLPerf benchmark and Patching
+To run the MLPerf benchmark you have to first find and download the imagenet dataset. Then do the following:
+
+1. Fetch the ResNet50 model and setup environment:
+	```bash
+	wget https://inaccel-demo.s3.amazonaws.com/models/resnet50_weights.h5
+
+	#set the model path (folder containing resnet50_weights.h5 file)
+	export MODEL_DIR=$(pwd)
+	#set the data path (imagenet folder containing the images)
+	export DATA_DIR=/path/to/imagenet
+	```
+2. Clone MLPerf repo and perform InAccel's patch:
+	```bash
+	# Clone MLPerf repo
+	git clone https://github.com/mlperf/inference_results_v0.7.git mlperf
+	# Copy the updated patch under mlperf/open/InAccel/code/resnet/inaccel-keras folder
+	cp mlperf.patch mlperf/open/InAccel/code/resnet/inaccel-keras
+
+	cd mlperf/open/InAccel/code/resnet/inaccel-keras
+	git submodule add https://github.com/mlcommons/inference
+
+	# Buil and install benchmark
+	make all
+	```
+	:warning: Make sure **python** command points to **Python3** installation or else you must edit the `Makefile` as well as the `run_local.sh` script under `inference/vision/classification_and_detection/` and change python to python3.
+3. Run ResNet50 or MobileNet:
+	```bash
+	cd inference/vision/classification_and_detection/
+
+	# ResNet50
+	./run_local.sh inaccel resnet50 --max-batchsize 400 --qps 10000 --scenario Offline
+	# MobileNet
+	./run_local.sh inaccel mobilenet --max-batchsize 400 --qps 10000 --scenario Offline
 	```
