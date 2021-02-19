@@ -1,61 +1,143 @@
-## InAccel Coral - Runtime specification
+# InAccel Runtime for Xilinx FINN MP Accelerators
+This repository contains a custom runtime imlpementation for the Xilinx FINN MP accelerators that couples together two Alveo U280 boards into a single resource.
 
-[InAccel](https://inaccel.com) provides a runtime specification that you can use to advertise system hardware resources to [Coral](https://inaccel.com/coral).
+To build the custom runtime just **clone** the repository and use the **Makefile** provided to generate the output shared library.
 
-### Abstract
-
-The InAccel Coral runtime specification aims to specify the configuration, and execution interface for the efficient management of any accelerator-based hardware resource.
-
-Without customizing the code for InAccel Coral itself, vendors can implement a custom runtime that you deploy as a platform, using InAccel container-runtime. The targeted cases include custom (non-OpenCL) implementations, new FPGA families, and other similar computing resources that may require vendor specific initialization and setup.
-
-### Use Cases
-
-To provide more context for users the following section gives example use cases for each part of the repository.
-
-#### Hook Developers
-
-Hook developers can extend the functionality of a compliant runtime by hooking into an accelerators's lifecycle with an external application. Example use cases include sophisticated hardware configuration, advanced logging, IP licensing (hardware identification - authentication - decryption), etc.
-
-#### Platform Developers
-
-Platform developers can build runtime implementations that expose diverse hardware resources and system configuration, containing low-level OS and hardware-specific details, on a particular platform.
-
-## InAccel Coral - Runtime options
-
-InAccel Coral relies on the provided compliant runtimes (loaded via `inaccel-runc`) as its interface to the target `device`, `memory`, and `accelerators`.
-
-Runtimes can be registered with Coral, as independent platforms, via the configuration file.
-
-By default, the InAccel container-runtime uses the configuration at `/etc/inaccel/coral.json`. The `--config-file` flag can be used to specify a non-default location:
-
-**docker/daemon.json**
-```json
-{
-	"default-runtime": "inaccel",
-	"runtimes": {
-		"inaccel": {
-			"path": "inaccel-runc",
-			"runtimeArgs": [
-				"--config-file /path/to/inaccel/coral.json"
-			]
-		}
-	}
-}
+``` bash
+https://github.com/inaccel/runtime.git -b Xilinx-MP
+make libXilinx-MP.so CPPFLAGS="-DXilinx -Iinclude -Iinclude/xrt -IOpenCL-Headers"
 ```
 
-The following is an example using the [default](https://github.com/inaccel/runtime/tree/default) `libXilinx.so` runtime, that depends on [XRT](https://github.com/Xilinx/XRT) OpenCL API:
+## InAccel vended FINN accelerators
 
-**inaccel/coral.json**
-```json
-{
-	"platforms": {
-		"xilinx": {
-			"runtime": "/etc/inaccel/runtimes/libXilinx.so",
-			"dependencies": ["xilinxopencl"],
-			"environment": ["XILINX_XRT=$ORIGIN"],
-			"binaries": ["/opt/xilinx/xrt/bin"],
-			"libraries": ["/opt/xilinx/xrt/lib"]
-		}
-	}
-}
+All of the FINN accelerators (MP and default ones) can be found at [InAccel's online bitstream repository](https://store.inaccel.com/artifactory/webapp/#/artifacts/browse/tree/General/bitstreams/xilinx), packaged using the [InAccel CLI tools](https://docs.inaccel.com/reference/inaccel/cli/) for instant deployment and usage with [InAccel Coral](https://inaccel.com/fpga-manager/). The links for each specific FINN accelerator are listed in the following tables:
+
+### ResNet50
+
+| U250 | U280 | U280 - MP Cases |
+| :----: | :----: | :--------------: |
+|[ResNet50](https://store.inaccel.com/artifactory/bitstreams/xilinx/u250/xdma_201830.2/xilinx/com/researchlabs/1.2/1resnet50) (1 instance)|[ResNet50](https://store.inaccel.com/artifactory/bitstreams/xilinx/u280/xdma_201920.3/xilinx/com/researchlabs/1.0/1resnet50) (1 instance)|[ResNet TMP](https://store.inaccel.com/artifactory/bitstreams/xilinx/2xu280/xdma_201920.3/xilinx/com/researchlabs/1.0/1resnet50) (1 instance)|
+|||[ResNet HwMP](https://store.inaccel.com/artifactory/bitstreams/xilinx/2xu280/xdma_201920.3/xilinx/com/researchlabs/1.1/1resnet50) (1 instance)|
+|||[ResNet SwMP](https://store.inaccel.com/artifactory/bitstreams/xilinx/2xu280/xdma_201920.3/xilinx/com/researchlabs/1.2/1resnet50-one_1resnet50-two) (1 instance)|
+
+### MobileNet
+
+| U250 | U280 | U280 - MP Cases |
+| :----: | :----: | :--------------: |
+|[MobileNet](https://store.inaccel.com/artifactory/bitstreams/xilinx/u250/xdma_201830.2/xilinx/com/researchlabs/1.0/2mobilenet) (2 instances)|[MobileNet](https://store.inaccel.com/artifactory/bitstreams/xilinx/u280/xdma_201920.3/xilinx/com/researchlabs/1.0/1mobilenet) (1 instance)|[MobileNet TMP](https://store.inaccel.com/artifactory/bitstreams/xilinx/2xu280/xdma_201920.3/xilinx/com/researchlabs/1.0/3mobilenet) (3 instances)|
+||[MobileNet](https://store.inaccel.com/artifactory/bitstreams/xilinx/u280/xdma_201920.3/xilinx/com/researchlabs/1.1/2mobilenet) (2 instances)|[MobileNet HwMP](https://store.inaccel.com/artifactory/bitstreams/xilinx/2xu280/xdma_201920.3/xilinx/com/researchlabs/1.1/3mobilenet) (3 instances)|
+|||[MobileNet SwMP](https://store.inaccel.com/artifactory/bitstreams/xilinx/2xu280/xdma_201920.3/xilinx/com/researchlabs/1.2/2mobilenet_1mobilenet-one_1mobilenet-two) (3 instances)|
+
+To install an accelerator use the `inaccel install <artifact>` command and the corresponding link from the table above. E.g.:
+```bash
+inaccel install https://store.inaccel.com/artifactory/bitstreams/xilinx/u250/xdma_201830.2/xilinx/com/researchlabs/1.2/1resnet50/
 ```
+
+## Setup InAccel and Use the Custom Runtime
+To setup InAccel and use the custom runtime for the MP accelerators, please follow the steps below.
+
+### Install InAccel and configure License
+First of all make sure you have installed Docker. Then, to acquire a **free** License head to [InAccel website](https://inaccel.com/license/). To complete with the installation execute the following code snippet, adding your license to the last command:
+
+```bash
+curl -sS https://setup.inaccel.com/repo | sh -s install
+systemctl enable docker
+systemctl restart docker
+inaccel config license <your-license>
+```
+
+### Install InAccel-Keras
+To install inaccel-keras python package make sure you have already setup Python3 and execute the following:
+```bash
+pip3 install inaccel-keras
+```
+### Use the custom runtime (MP cases)
+**Build** the custom runtime, move the generated shared library file under `/etc/inaccel/runtimes` and finally edit `etc/inaccel/coral.json` file, with an editor of your choice, so that **libXilinx-MP.so** is used rather than the default libXilinx.so .
+
+``` bash
+https://github.com/inaccel/runtime.git -b Xilinx-MP
+make libXilinx-MP.so CPPFLAGS="-DXilinx -Iinclude -Iinclude/xrt -IOpenCL-Headers"
+sudo mv libXilinx-MP.so /etc/inaccel/runtimes
+sudo nano /etc/inaccel/coral.json #change libXilinx.so to libXilinx-MP.so
+```
+
+### Start InAccel
+Use the 2.0.0 tag of inaccel/coral image when starting inaccel.
+
+```bash
+inaccel start -t 2.0.0
+```
+
+You're all set up! You can now develop your own application or use one of the following simple examples:
+
+## Download Sample Images
+```bash
+wget https://github.com/inaccel/keras/raw/master/examples/data/dog.jpg
+wget https://github.com/inaccel/keras/raw/master/examples/data/elephant.jpg
+```
+
+### ResNet50 Example
+1. Install one of the ResNet50 MP bitstreams available. E.g.:
+	```bash
+	inaccel install https://store.inaccel.com/artifactory/bitstreams/xilinx/2xu280/xdma_201920.3/xilinx/com/researchlabs/1.0/1resnet50/
+	```
+2. Fetch the ResNet50 model:
+	```bash
+	wget https://inaccel-demo.s3.amazonaws.com/models/resnet50_weights.h5
+	```
+
+3. Run the application
+
+	```python
+	import numpy as np
+
+	from inaccel.keras.applications.resnet50 import decode_predictions, ResNet50
+	from inaccel.keras.preprocessing.image import load_img
+
+	model = ResNet50(weights='resnet50_weights.h5')
+
+	dog = load_img('dog.jpg', target_size=(224, 224))
+	dog = np.expand_dims(dog, axis=0)
+	print(dog.shape)
+
+	elephant = load_img('elephant.jpg', target_size=(224, 224))
+	elephant = np.expand_dims(elephant, axis=0)
+	print(elephant.shape)
+
+	images = np.vstack([dog, elephant])
+
+	preds = model.predict(images)
+
+	print('Predictions:', decode_predictions(preds, top=5))
+	```
+
+### MobileNet Example
+
+1. Install one of the MobileNet MP bitstreams available. E.g.:
+	```bash
+	inaccel install https://store.inaccel.com/artifactory/bitstreams/xilinx/2xu280/xdma_201920.3/xilinx/com/researchlabs/1.0/3mobilenet/
+	```
+2. Run the application
+
+	```python
+	import numpy as np
+
+	from inaccel.keras.applications.mobilenet import decode_predictions, MobileNet
+	from inaccel.keras.preprocessing.image import load_img
+
+	model = MobileNet()
+
+	dog = load_img('dog.jpg', target_size=(224, 224))
+	dog = np.expand_dims(dog, axis=0)
+	print(dog.shape)
+
+	elephant = load_img('elephant.jpg', target_size=(224, 224))
+	elephant = np.expand_dims(elephant, axis=0)
+	print(elephant.shape)
+
+	images = np.vstack([car, dog, elephant])
+
+	preds = model.predict(images)
+
+	print('Predictions:', decode_predictions(preds, top=5))
+	```
