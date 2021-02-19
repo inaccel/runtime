@@ -1,5 +1,5 @@
 # InAccel Runtime for Xilinx FINN MP Accelerators
-This repository contains a custom runtime imlpementation for the Xilinx FINN MP accelerators that couples together two Alveo U280 boards into a single resource.
+This repository contains a custom runtime imlpementation for the Xilinx [FINN](https://github.com/Xilinx/finn) MP accelerators that couples together two Alveo U280 boards into a single resource.
 
 To build the custom runtime just **clone** the repository and use the **Makefile** provided to generate the output shared library.
 
