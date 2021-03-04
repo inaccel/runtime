@@ -1,3 +1,6 @@
 [submodule "spec"]
 	path = spec
 	url = https://github.com/inaccel/runtime-spec
+[submodule "OpenCL-Headers"]
+	path = vendor/OpenCL-Headers
+	url = https://github.com/KhronosGroup/OpenCL-Headers
