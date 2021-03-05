@@ -1,4 +1,4 @@
-RUNTIMES =
+RUNTIMES = intel-fpga
 
 all: $(RUNTIMES)
 
