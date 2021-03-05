@@ -1,0 +1,7 @@
+XILINX_XRT=$ORIGIN
+
+Name: Xilinx FPGA
+Version: 2
+Description: The default 'Xilinx FPGA' runtime
+URL: https://github.com/inaccel/runtime
+Libs: -L/opt/xilinx/xrt/lib -lxilinxopencl -lxrt_core
