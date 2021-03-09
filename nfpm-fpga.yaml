@@ -1,0 +1,20 @@
+arch: amd64
+contents:
+- dst: /etc/inaccel/runtimes/intel-fpga/a.out
+  src: configs/intel-fpga/a.out
+- dst: /etc/inaccel/runtimes/intel-fpga/inaccel.pc
+  src: configs/intel-fpga/inaccel.pc
+  type: config|noreplace
+- dst: /etc/inaccel/runtimes/xilinx-fpga/a.out
+  src: configs/xilinx-fpga/a.out
+- dst: /etc/inaccel/runtimes/xilinx-fpga/inaccel.pc
+  src: configs/xilinx-fpga/inaccel.pc
+  type: config|noreplace
+description: InAccel is a product for you to build, ship and run hardware accelerated applications
+homepage: https://inaccel.com
+license: Apache-2.0
+maintainer: InAccel <info@inaccel.com>
+name: inaccel-fpga
+release: ${RELEASE}
+vendor: InAccel
+version: ${VERSION}

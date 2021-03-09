@@ -1,0 +1,54 @@
+name: release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: VERSION
+        required: true
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+      with:
+        submodules: true
+    - name: Build 'Intel FPGA' runtime
+      run: make intel-fpga
+    - name: Build 'Xilinx FPGA' runtime
+      run: make xilinx-fpga
+    - name: Package Debian
+      uses: docker://goreleaser/nfpm
+      env:
+        VERSION: ${{ github.event.inputs.version }}
+      with:
+        args: pkg --config nfpm-fpga.yaml --packager deb
+    - name: Package RPM
+      uses: docker://goreleaser/nfpm
+      env:
+        VERSION: ${{ github.event.inputs.version }}
+        RELEASE: 1
+      with:
+        args: pkg --config nfpm-fpga.yaml --packager rpm
+    - name: Push Debian
+      uses: cloudsmith-io/action@master
+      with:
+        api-key: ${{ secrets.CLOUDSMITH_API_KEY }}
+        command: push
+        format: deb
+        owner: inaccel
+        repo: stable
+        distro: any-distro
+        release: any-version
+        file: '*.deb'
+    - name: Push RPM
+      uses: cloudsmith-io/action@master
+      with:
+        api-key: ${{ secrets.CLOUDSMITH_API_KEY }}
+        command: push
+        format: rpm
+        owner: inaccel
+        repo: stable
+        distro: any-distro
+        release: any-version
+        file: '*.rpm'
