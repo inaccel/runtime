@@ -133,7 +133,7 @@ cl_buffer create_buffer(cl_memory memory, size_t size, void *host) {
 	cl_uint CL_MEMORY = memory->id << 16;
 
 	cl_buffer buffer = (cl_buffer) calloc(1, sizeof(struct _cl_buffer));
-	if (!buffer) return NULL;
+	if (!buffer) return INACCEL_FAILED;
 
 	buffer->size = size;
 	buffer->ptr = host;
@@ -146,7 +146,7 @@ cl_buffer create_buffer(cl_memory memory, size_t size, void *host) {
 	if (!(buffer->command_queue = inclCreateCommandQueue(memory->resource->context, memory->resource->device_id))) {
 		inclReleaseMemObject(buffer->mem);
 		free(buffer);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	return buffer;
@@ -154,7 +154,7 @@ cl_buffer create_buffer(cl_memory memory, size_t size, void *host) {
 
 cl_compute_unit create_compute_unit(cl_resource resource, const char *name) {
 	cl_compute_unit compute_unit = (cl_compute_unit) calloc(1, sizeof(struct _cl_compute_unit));
-	if (!compute_unit) return NULL;
+	if (!compute_unit) return INACCEL_FAILED;
 
 	if (!(compute_unit->kernel = inclCreateKernel(resource->program, name))) {
 		free(compute_unit);
@@ -164,7 +164,7 @@ cl_compute_unit create_compute_unit(cl_resource resource, const char *name) {
 	if (!(compute_unit->command_queue = inclCreateCommandQueue(resource->context, resource->device_id))) {
 		inclReleaseKernel(compute_unit->kernel);
 		free(compute_unit);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	return compute_unit;
@@ -174,7 +174,7 @@ cl_memory create_memory(cl_resource resource, unsigned int index) {
 	// Intel has only one memory (for now)
 	if (!index) {
 		cl_memory memory = (cl_memory) calloc(1, sizeof(struct _cl_memory));
-		if (!memory) return NULL;
+		if (!memory) return INACCEL_FAILED;
 
 		memory->id = index;
 		memory->resource = resource;
@@ -187,7 +187,7 @@ cl_memory create_memory(cl_resource resource, unsigned int index) {
 
 cl_resource create_resource(unsigned int index) {
 	cl_resource resource = (cl_resource) calloc(1, sizeof(struct _cl_resource));
-	if (!resource) return NULL;
+	if (!resource) return INACCEL_FAILED;
 
 	if (!(resource->platform_id = inclGetPlatformID("Intel"))) {
 		free(resource);
@@ -201,14 +201,14 @@ cl_resource create_resource(unsigned int index) {
 
 	if (!(resource->context = inclCreateContext(resource->device_id))) {
 		free(resource);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	if (!(resource->vendor = strdup("intel"))) {
 		perror("Error: strdup");
 		inclReleaseContext(resource->context);
 		free(resource);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	size_t raw_name_size;
@@ -220,7 +220,7 @@ cl_resource create_resource(unsigned int index) {
 		free(resource->vendor);
 		inclReleaseContext(resource->context);
 		free(resource);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, raw_name_size, raw_name, NULL);
@@ -232,7 +232,7 @@ cl_resource create_resource(unsigned int index) {
 		free(resource->vendor);
 		inclReleaseContext(resource->context);
 		free(resource);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	const char *regex = "^([^ : ]+) : .*_(.+)0000(.).$";
@@ -247,7 +247,7 @@ cl_resource create_resource(unsigned int index) {
 		free(resource->vendor);
 		inclReleaseContext(resource->context);
 		free(resource);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	long int major, minor;
@@ -265,7 +265,7 @@ cl_resource create_resource(unsigned int index) {
 			free(resource->vendor);
 			inclReleaseContext(resource->context);
 			free(resource);
-			return NULL;
+			return INACCEL_FAILED;
 		}
 		major = strtol(tmp, NULL, 16);
 		free(tmp);
@@ -278,7 +278,7 @@ cl_resource create_resource(unsigned int index) {
 			free(resource->vendor);
 			inclReleaseContext(resource->context);
 			free(resource);
-			return NULL;
+			return INACCEL_FAILED;
 		}
 		minor = strtol(tmp, NULL, 16);
 		free(tmp);
@@ -289,7 +289,7 @@ cl_resource create_resource(unsigned int index) {
 		free(resource->vendor);
 		inclReleaseContext(resource->context);
 		free(resource);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	regfree(&compile);
@@ -305,11 +305,12 @@ cl_resource create_resource(unsigned int index) {
 		free(resource->vendor);
 		inclReleaseContext(resource->context);
 		free(resource);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	glob_t dev;
-	if (!glob("/sys/devices/pci*/*/{,/*}/fpga/intel-fpga-dev.*/intel-fpga-port.*/dev", GLOB_NOSORT | GLOB_BRACE, NULL, &dev)) {
+	int glob_ret;
+	if (!(glob_ret = glob("/sys/devices/pci*/*/{,/*}/fpga/intel-fpga-dev.*/intel-fpga-port.*/dev", GLOB_NOSORT | GLOB_BRACE, NULL, &dev))) {
 		size_t i;
 		for (i = 0; i < dev.gl_pathc; i++) {
 			long int dev_major;
@@ -331,7 +332,7 @@ cl_resource create_resource(unsigned int index) {
 				sprintf(path, "%s/intel-fpga-fme.*/pr/interface_id", dirname(dirname(dev.gl_pathv[i])));
 
 				glob_t interface_id;
-				if (!glob(path, GLOB_NOSORT, NULL, &interface_id)) {
+				if (!(glob_ret = glob(path, GLOB_NOSORT, NULL, &interface_id))) {
 					FILE *interface_id_file = fopen(interface_id.gl_pathv[0], "r");
 					if (!interface_id_file) {
 						break;
@@ -350,6 +351,8 @@ cl_resource create_resource(unsigned int index) {
 			}
 		}
 		globfree(&dev);
+
+		if (i == dev.gl_pathc) glob_ret = GLOB_NOMATCH;
 	} else perror("Error: glob");
 
 	if (!strlen(resource->version)) {
@@ -359,7 +362,8 @@ cl_resource create_resource(unsigned int index) {
 		free(resource->vendor);
 		inclReleaseContext(resource->context);
 		free(resource);
-		return NULL;
+		if (glob_ret == GLOB_NOMATCH) return NULL;
+		else return INACCEL_FAILED;
 	}
 
 	// temperature and power are optional (at least for now)
@@ -419,7 +423,7 @@ float get_resource_temperature(cl_resource resource) {
 		}
 	}
 
-	return -1;
+	return -1.0f;
 }
 
 char *get_resource_vendor(cl_resource resource) {

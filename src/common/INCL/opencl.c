@@ -336,7 +336,7 @@ int inclGetMemObjectInfo(cl_mem memobj, cl_mem_info param_name, size_t param_val
 
 /* Obtain specified platform, if available. */
 cl_platform_id inclGetPlatformID(const char *platform_id) {
-	cl_platform_id platform;
+	cl_platform_id platform = NULL;
 
 	cl_uint num_platforms;
 	inclGetPlatformIDs(0, NULL, &num_platforms);

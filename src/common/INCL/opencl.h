@@ -55,7 +55,7 @@ int inclGetKernelInfo(cl_kernel kernel, cl_kernel_info param_name, size_t param_
 /* Get specific information about the OpenCL buffer. */
 int inclGetMemObjectInfo(cl_mem memobj, cl_mem_info param_name, size_t param_value_size, void *param_value, size_t *param_value_size_ret);
 
-/* Obtain specified  platform, if available. */
+/* Obtain specified platform, if available. */
 cl_platform_id inclGetPlatformID(const char *platform_id);
 
 /* Obtain the list of platforms available. */

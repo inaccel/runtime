@@ -99,7 +99,7 @@ cl_buffer create_buffer(cl_memory memory, size_t size, void *host) {
 	ext_ptr.param = 0;
 
 	cl_buffer buffer = (cl_buffer) calloc(1, sizeof(struct _cl_buffer));
-	if (!buffer) return NULL;
+	if (!buffer) return INACCEL_FAILED;
 
 	if (!(buffer->mem = inclCreateBuffer(memory->resource->context, CL_MEM_EXT_PTR | CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, size, &ext_ptr))) {
 		free(buffer);
@@ -109,7 +109,7 @@ cl_buffer create_buffer(cl_memory memory, size_t size, void *host) {
 	if (!(buffer->command_queue = inclCreateCommandQueue(memory->resource->context, memory->resource->device_id))) {
 		inclReleaseMemObject(buffer->mem);
 		free(buffer);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	buffer->memory = memory;
@@ -119,7 +119,7 @@ cl_buffer create_buffer(cl_memory memory, size_t size, void *host) {
 
 cl_compute_unit create_compute_unit(cl_resource resource, const char *name) {
 	cl_compute_unit compute_unit = (cl_compute_unit) calloc(1, sizeof(struct _cl_compute_unit));
-	if(!compute_unit) return NULL;
+	if(!compute_unit) return INACCEL_FAILED;
 
 	if (!(compute_unit->kernel = inclCreateKernel(resource->program, name))) {
 		free(compute_unit);
@@ -129,7 +129,7 @@ cl_compute_unit create_compute_unit(cl_resource resource, const char *name) {
 	if (!(compute_unit->command_queue = inclCreateCommandQueue(resource->context, resource->device_id))) {
 		inclReleaseKernel(compute_unit->kernel);
 		free(compute_unit);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	cl_uint num_arguments;
@@ -139,7 +139,7 @@ cl_compute_unit create_compute_unit(cl_resource resource, const char *name) {
 		inclReleaseCommandQueue(compute_unit->command_queue);
 		inclReleaseKernel(compute_unit->kernel);
 		free(compute_unit);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	return compute_unit;
@@ -148,7 +148,7 @@ cl_compute_unit create_compute_unit(cl_resource resource, const char *name) {
 cl_memory create_memory(cl_resource resource, unsigned int index) {
 	if (resource->topology && (index < resource->topology->m_count)) {
 		cl_memory memory = (cl_memory) calloc(1, sizeof(struct _cl_memory));
-		if (!memory) return NULL;
+		if (!memory) return INACCEL_FAILED;
 
 		memory->id = index;
 		memory->resource = resource;
@@ -163,7 +163,7 @@ cl_memory create_memory(cl_resource resource, unsigned int index) {
 
 		if (!(memory->page_buf = inclCreateBuffer(memory->resource->context, CL_MEM_EXT_PTR | CL_MEM_WRITE_ONLY, 4096, &ext_ptr))) {
 			free(memory);
-			return NULL;
+			return INACCEL_FAILED;
 		}
 
 		// Type is optional (at least for now)
@@ -187,7 +187,7 @@ cl_memory create_memory(cl_resource resource, unsigned int index) {
 
 cl_resource create_resource(unsigned int index) {
 	cl_resource resource = (cl_resource) calloc(1, sizeof(struct _cl_resource));
-	if (!resource) return NULL;
+	if (!resource) return INACCEL_FAILED;
 
 	if (!(resource->platform_id = inclGetPlatformID("Xilinx"))) {
 		free(resource);
@@ -201,14 +201,14 @@ cl_resource create_resource(unsigned int index) {
 
 	if (!(resource->context = inclCreateContext(resource->device_id))) {
 		free(resource);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	if (!(resource->vendor = strdup("xilinx"))) {
 		perror("Error: strdup");
 		inclReleaseContext(resource->context);
 		free(resource);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	size_t raw_name_size;
@@ -220,7 +220,7 @@ cl_resource create_resource(unsigned int index) {
 		free(resource->vendor);
 		inclReleaseContext(resource->context);
 		free(resource);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, raw_name_size, raw_name, NULL);
@@ -232,7 +232,7 @@ cl_resource create_resource(unsigned int index) {
 		free(resource->vendor);
 		inclReleaseContext(resource->context);
 		free(resource);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	resource->version = (char *) calloc(raw_name_size, sizeof(char));
@@ -243,7 +243,7 @@ cl_resource create_resource(unsigned int index) {
 		free(resource->vendor);
 		inclReleaseContext(resource->context);
 		free(resource);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	const char *regex = "^xilinx_([^_]+)_(.*)_([^_]+)_([^_]+)$";
@@ -259,7 +259,7 @@ cl_resource create_resource(unsigned int index) {
 		free(resource->vendor);
 		inclReleaseContext(resource->context);
 		free(resource);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	if (!regexec(&compile, raw_name, 5, group, 0)) {
@@ -278,7 +278,7 @@ cl_resource create_resource(unsigned int index) {
 		free(resource->vendor);
 		inclReleaseContext(resource->context);
 		free(resource);
-		return NULL;
+		return INACCEL_FAILED;
 	}
 
 	regfree(&compile);
@@ -286,9 +286,10 @@ cl_resource create_resource(unsigned int index) {
 	free(raw_name);
 
 	glob_t dev;
+	int glob_ret;
 	unsigned idx = 0;
 
-	if (!glob("/sys/bus/pci/drivers/{xocl,xuser}/*:*:*.*", GLOB_BRACE, NULL, &dev)) {
+	if (!(glob_ret = glob("/sys/bus/pci/drivers/{xocl,xuser}/*:*:*.*", GLOB_BRACE, NULL, &dev))) {
 		size_t i;
 		for (i = dev.gl_pathc; i > 0; i--) {
 			char temp_dev[PATH_MAX / 2] = {0};
@@ -299,7 +300,7 @@ cl_resource create_resource(unsigned int index) {
 			sprintf(path, "%s/%s/ready", dirname(dev.gl_pathv[i - 1]), temp_dev);
 
 			FILE *ready_file = fopen(path, "r");
-			if (!ready_file) continue;
+			if (!ready_file) break;
 
 			unsigned ready;
 			if(fscanf(ready_file, "0x%d", &ready) <= 0) continue;
@@ -315,8 +316,9 @@ cl_resource create_resource(unsigned int index) {
 				else idx++;
 			}
 		}
-
 		globfree(&dev);
+
+		if (!i) glob_ret = GLOB_NOMATCH;
 	} else perror("Error: glob");
 
 	if (!resource->root_path) {
@@ -328,7 +330,8 @@ cl_resource create_resource(unsigned int index) {
 		free(resource->vendor);
 		inclReleaseContext(resource->context);
 		free(resource);
-		return NULL;
+		if (glob_ret == GLOB_NOMATCH) return NULL;
+		else return INACCEL_FAILED;
 	}
 
 	char path[PATH_MAX];
@@ -417,7 +420,7 @@ float get_resource_temperature(cl_resource resource) {
 		}
 	}
 
-	return -1;
+	return -1.0f;
 }
 
 char *get_resource_vendor(cl_resource resource) {
