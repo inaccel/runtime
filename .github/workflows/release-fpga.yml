@@ -1,4 +1,4 @@
-name: release
+name: release-fpga
 on:
   workflow_dispatch:
     inputs:
