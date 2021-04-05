@@ -14,9 +14,13 @@ jobs:
       with:
         submodules: true
     - name: Build 'Intel FPGA' runtime
-      run: make intel-fpga
+      uses: docker://buildpack-deps:precise
+      with:
+        args: make intel-fpga
     - name: Build 'Xilinx FPGA' runtime
-      run: make xilinx-fpga
+      uses: docker://buildpack-deps:precise
+      with:
+        args: make xilinx-fpga
     - name: Package Debian
       uses: docker://goreleaser/nfpm
       env:
