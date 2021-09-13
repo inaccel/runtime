@@ -21,6 +21,18 @@ jobs:
       uses: docker://buildpack-deps:precise
       with:
         args: make xilinx-fpga
+    - name: Package archive
+      run: tar cvz -f fpga.tar.gz *-fpga
+      working-directory: configs
+    - name: Release archive
+      uses: softprops/action-gh-release@v1
+      with:
+        body: |
+          ```
+          mkdir -p ${XDG_CONFIG_HOME:-~/.config}/inaccel/runtimes
+          curl -sSL 'https://releases.inaccel.com/api?repo=runtime&tag=fpga-${{ github.event.inputs.version }}' | tar xz -C ${XDG_CONFIG_HOME:-~/.config}/inaccel/runtimes
+        files: configs/fpga.tar.gz
+        tag_name: fpga-${{ github.event.inputs.version }}
     - name: Package Debian
       uses: docker://goreleaser/nfpm
       env:
