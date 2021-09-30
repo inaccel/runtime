@@ -29,8 +29,7 @@ jobs:
       with:
         body: |
           ```
-          mkdir -p ${XDG_CONFIG_HOME:-~/.config}/inaccel/runtimes
-          curl -sSL 'https://releases.inaccel.com/api?repo=runtime&tag=fpga-${{ github.event.inputs.version }}' | tar xz -C ${XDG_CONFIG_HOME:-~/.config}/inaccel/runtimes
+          curl -sS https://setup.inaccel.com/runtime/fpga | sh -s ${{ github.event.inputs.version }}
         files: configs/fpga.tar.gz
         tag_name: fpga-${{ github.event.inputs.version }}
     - name: Package Debian

@@ -1,0 +1,20 @@
+#!/bin/sh
+
+[ ${DEBUG} ] && set -vx
+set -eu
+
+rootless() {
+	[ "$(id -u 2>/dev/null)" != "0" ]
+}
+
+if rootless; then
+	: ${INACCEL_RUNTIMES:=${XDG_CONFIG_HOME:-~/.config}/inaccel/runtimes}
+else
+	: ${INACCEL_RUNTIMES:=/etc/inaccel/runtimes}
+fi
+
+mkdir -p ${INACCEL_RUNTIMES}
+
+curl -sSL "https://releases.inaccel.com/api?repo=runtime&tag=fpga-${*:-*}" | tar xz -C ${INACCEL_RUNTIMES}
+
+(cd ${INACCEL_RUNTIMES} && echo ${INACCEL_RUNTIMES}: *-fpga)
