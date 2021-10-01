@@ -1,2 +1,4 @@
 description: quick & easy setup
+github:
+  private: true
 name: InAccel runtime
