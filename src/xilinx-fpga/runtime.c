@@ -1,77 +1,163 @@
 #include <glob.h>
+#include <inaccel/runtime.h>
 #include <libgen.h>
 #include <limits.h>
+#include <pthread.h>
 #include <regex.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
 #include "INCL/opencl.h"
-#include <inaccel/runtime.h>
 
 struct mem_data {
-	uint8_t m_type;          // enum corresponding to mem_type.
-	uint8_t m_used;          // if 0 this bank is not present
-	uint8_t padding[6];      // 8 Byte alignment padding (initialized to zeros)
+	uint8_t m_type;
+	uint8_t m_used;
+	uint8_t padding[6];
 	union {
-		uint64_t m_size;     // if mem_type DDR, then size in KB;
-		uint64_t route_id;   // if streaming then "route_id"
+		uint64_t m_size;
+		uint64_t route_id;
 	};
 	union {
-		uint64_t m_base_address; // if DDR then the base address;
-		uint64_t flow_id;        // if streaming then "flow id"
+		uint64_t m_base_address;
+		uint64_t flow_id;
 	};
-	unsigned char m_tag[16]; // DDR: BANK0,1,2,3, has to be null terminated; if streaming then stream0, 1 etc
+	unsigned char m_tag[16];
 };
 
 struct mem_topology {
-	int32_t m_count; //Number of mem_data
-	struct mem_data m_mem_data[1]; //Should be sorted on mem_type
+	int32_t m_count;
+	struct mem_data m_mem_data[0];
 };
 
-typedef struct{
-	unsigned flags;
-	void *obj;
-	void *param;
-} cl_mem_ext_ptr_t;
-
 struct _cl_buffer {
+	cl_memory memory;
+	size_t size;
+	void *host;
+
 	cl_command_queue command_queue;
 	cl_mem mem;
-	cl_memory memory;
 };
 
 struct _cl_compute_unit {
+	cl_resource resource;
+	char *name;
+
 	cl_command_queue command_queue;
 	cl_kernel kernel;
-	cl_mem *args;
+
+	cl_memory *memory;
 };
 
 struct _cl_memory {
-	unsigned int id;
 	cl_resource resource;
+	unsigned int index;
+
+	size_t size;
 	char *type;
-	cl_mem page_buf;
+
+	cl_mem page;
 };
 
 struct _cl_resource {
-	// Virtual device variables
+	unsigned int index;
+
+	char *name;
+	float power;
+	char *serial_no;
+	float temperature;
+	char *version;
+	char *vendor;
+
 	cl_context context;
 	cl_device_id device_id;
 	cl_platform_id platform_id;
 	cl_program program;
 
-	// Physical device variables
-	char *name;
+	pthread_t thread;
+	unsigned char release;
 	char *root_path;
-	char *vendor;
-	char *version;
-	struct mem_topology *topology;
 
-	char *temperature;
-	char *power;
-	char *serial_no;
+	struct mem_topology *mem_topology;
 };
+
+float get_power(char *power_path) {
+	FILE *power_stream = fopen(power_path, "r");
+	if (power_stream) {
+		unsigned int power;
+		int ret = fscanf(power_stream, "%u", &power);
+		fclose(power_stream);
+		if (ret != EOF) {
+			return power / 1000000.0f;
+		}
+	}
+	return 0.0f;
+}
+
+float get_temperature(char *temperature_path) {
+	FILE *temperature_stream = fopen(temperature_path, "r");
+	if (temperature_stream) {
+		float temperature;
+		int ret = fscanf(temperature_stream, "%f", &temperature);
+		fclose(temperature_stream);
+		if (ret != EOF) {
+			return temperature;
+		}
+	}
+	return 0.0f;
+}
+
+void *sensor_routine(void *arg) {
+	cl_resource resource = (cl_resource) arg;
+
+	char power_path[PATH_MAX] = {0};
+	char temperature_path[PATH_MAX] = {0};
+
+	char xmc_pattern[PATH_MAX];
+	if (sprintf(xmc_pattern, "%s/xmc.*", resource->root_path) >= 0) {
+		glob_t xmc;
+		if (!glob(xmc_pattern, GLOB_NOSORT, NULL, &xmc)) {
+			sprintf(power_path, "%s/xmc_power", xmc.gl_pathv[0]);
+			sprintf(temperature_path, "%s/xmc_fpga_temp", xmc.gl_pathv[0]);
+			globfree(&xmc);
+		}
+	}
+
+	if (!strlen(power_path) && !strlen(temperature_path)) {
+		return NULL;
+	}
+
+	for (;;) {
+		if (resource->release) {
+			return NULL;
+		}
+
+		#define SEC_TO_USEC(sec) ((sec) * 1000000)
+		#define NSEC_TO_USEC(nsec) ((nsec) / 1000)
+
+		struct timespec tp;
+
+		clock_gettime(CLOCK_MONOTONIC, &tp);
+		unsigned long start = SEC_TO_USEC((unsigned long) tp.tv_sec) + NSEC_TO_USEC((unsigned long) tp.tv_nsec);
+
+		if (strlen(power_path)) {
+			resource->power = get_power(power_path);
+		}
+		if (strlen(temperature_path)) {
+			resource->temperature = get_temperature(temperature_path);
+		}
+
+		clock_gettime(CLOCK_MONOTONIC, &tp);
+		unsigned long stop = SEC_TO_USEC((unsigned long) tp.tv_sec) + NSEC_TO_USEC((unsigned long) tp.tv_nsec);
+
+		unsigned long usec = stop - start;
+		if (usec < 999999) {
+			usleep(999999 - usec);
+		}
+	}
+
+	return NULL;
+}
 
 int await_buffer_copy(cl_buffer buffer) {
 	return inclFinish(buffer->command_queue);
@@ -90,55 +176,97 @@ int copy_to_buffer(cl_buffer buffer) {
 }
 
 cl_buffer create_buffer(cl_memory memory, size_t size, void *host) {
-	cl_uint CL_MEM_EXT_PTR = 1 << 31;
-	cl_uint CL_MEMORY = memory->id | (1 << 31);
-
-	cl_mem_ext_ptr_t ext_ptr;
-	ext_ptr.flags = CL_MEMORY;
-	ext_ptr.obj = host;
-	ext_ptr.param = 0;
-
 	cl_buffer buffer = (cl_buffer) calloc(1, sizeof(struct _cl_buffer));
-	if (!buffer) return INACCEL_FAILED;
+	if (!buffer) {
+		perror("Error: calloc");
 
-	if (!(buffer->mem = inclCreateBuffer(memory->resource->context, CL_MEM_EXT_PTR | CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, size, &ext_ptr))) {
+		return INACCEL_FAILED;
+	}
+
+	buffer->memory = memory;
+	buffer->size = size;
+	buffer->host = host;
+
+	#define CL_MEM_EXT_PTR_XILINX (1 << 31)
+	struct cl_mem_ext_ptr_t {
+		unsigned int flags;
+		void *obj;
+		void *param;
+	} ext_ptr = {
+		memory->index | CL_MEM_EXT_PTR_XILINX,
+		buffer->host,
+		0
+	};
+	if (!(buffer->mem = inclCreateBuffer(memory->resource->context, CL_MEM_EXT_PTR_XILINX | CL_MEM_USE_HOST_PTR | CL_MEM_WRITE_ONLY, buffer->size, &ext_ptr))) {
 		free(buffer);
+
 		return NULL;
 	}
 
 	if (!(buffer->command_queue = inclCreateCommandQueue(memory->resource->context, memory->resource->device_id))) {
 		inclReleaseMemObject(buffer->mem);
+
 		free(buffer);
+
 		return INACCEL_FAILED;
 	}
-
-	buffer->memory = memory;
 
 	return buffer;
 }
 
 cl_compute_unit create_compute_unit(cl_resource resource, const char *name) {
 	cl_compute_unit compute_unit = (cl_compute_unit) calloc(1, sizeof(struct _cl_compute_unit));
-	if(!compute_unit) return INACCEL_FAILED;
+	if (!compute_unit) {
+		perror("Error: calloc");
 
-	if (!(compute_unit->kernel = inclCreateKernel(resource->program, name))) {
+		return INACCEL_FAILED;
+	}
+
+	compute_unit->resource = resource;
+	if (!(compute_unit->name = strdup(name))) {
+		perror("Error: strdup");
+
 		free(compute_unit);
+
+		return INACCEL_FAILED;
+	}
+
+	if (!(compute_unit->kernel = inclCreateKernel(compute_unit->resource->program, compute_unit->name))) {
+		free(compute_unit->name);
+		free(compute_unit);
+
 		return NULL;
 	}
 
 	if (!(compute_unit->command_queue = inclCreateCommandQueue(resource->context, resource->device_id))) {
 		inclReleaseKernel(compute_unit->kernel);
+
+		free(compute_unit->name);
 		free(compute_unit);
+
 		return INACCEL_FAILED;
 	}
 
-	cl_uint num_arguments;
-	inclGetKernelInfo(compute_unit->kernel, CL_KERNEL_NUM_ARGS, sizeof(cl_uint), &num_arguments, NULL);
-
-	if (!(compute_unit->args = (cl_mem *) calloc(num_arguments, sizeof(cl_mem)))) {
+	unsigned int num_args;
+	if (inclGetKernelInfo(compute_unit->kernel, CL_KERNEL_NUM_ARGS, sizeof(unsigned int), &num_args, NULL)) {
 		inclReleaseCommandQueue(compute_unit->command_queue);
 		inclReleaseKernel(compute_unit->kernel);
+
+		free(compute_unit->name);
 		free(compute_unit);
+
+		return INACCEL_FAILED;
+	}
+
+	if (!(compute_unit->memory = (cl_memory *) calloc(num_args, sizeof(cl_memory)))) {
+		perror("Error: calloc");
+
+		inclReleaseCommandQueue(compute_unit->command_queue);
+		inclReleaseKernel(compute_unit->kernel);
+
+		free(compute_unit->name);
+		free(compute_unit);
+
 		return INACCEL_FAILED;
 	}
 
@@ -146,103 +274,161 @@ cl_compute_unit create_compute_unit(cl_resource resource, const char *name) {
 }
 
 cl_memory create_memory(cl_resource resource, unsigned int index) {
-	if (resource->topology && (index < resource->topology->m_count)) {
+	if (index < resource->mem_topology->m_count && resource->mem_topology->m_mem_data[index].m_used) {
 		cl_memory memory = (cl_memory) calloc(1, sizeof(struct _cl_memory));
-		if (!memory) return INACCEL_FAILED;
+		if (!memory) {
+			perror("Error: calloc");
 
-		memory->id = index;
-		memory->resource = resource;
-
-		cl_uint CL_MEM_EXT_PTR = 1 << 31;
-		cl_uint CL_MEMORY = memory->id | (1 << 31);
-
-		cl_mem_ext_ptr_t ext_ptr;
-		ext_ptr.flags = CL_MEMORY;
-		ext_ptr.obj = NULL;
-		ext_ptr.param = 0;
-
-		if (!(memory->page_buf = inclCreateBuffer(memory->resource->context, CL_MEM_EXT_PTR | CL_MEM_WRITE_ONLY, 4096, &ext_ptr))) {
-			free(memory);
 			return INACCEL_FAILED;
 		}
 
-		// Type is optional (at least for now)
-		char *type = (char *) malloc(strlen((const char *) memory->resource->topology->m_mem_data[memory->id].m_tag));
-		if (type) {
-			strcpy(type, (const char *) memory->resource->topology->m_mem_data[memory->id].m_tag);
+		memory->resource = resource;
+		memory->index = index;
 
-			strtok(type, "[");
+		#define CL_MEM_EXT_PTR_XILINX (1 << 31)
+		struct cl_mem_ext_ptr_t {
+			unsigned int flags;
+			void *obj;
+			void *param;
+		} ext_ptr = {
+			memory->index | CL_MEM_EXT_PTR_XILINX,
+			NULL,
+			0
+		};
+		if (!(memory->page = inclCreateBuffer(memory->resource->context, CL_MEM_EXT_PTR_XILINX | CL_MEM_WRITE_ONLY, 4096, &ext_ptr))) {
+			free(memory);
 
-			if (strcmp(type, "bank0") && strcmp(type, "bank1") && strcmp(type, "bank2") && strcmp(type, "bank3")) {
-				memory->type = type;
-			} else{
-				free(type);
-				memory->type = strdup("DDR");
+			return INACCEL_FAILED;
+		}
+
+		memory->size = memory->resource->mem_topology->m_mem_data[memory->index].m_size * 1024 - 4096;
+
+		if (!strncmp("bank", (char *) memory->resource->mem_topology->m_mem_data[memory->index].m_tag, strlen("bank"))) {
+			if (!(memory->type = strdup("DDR"))) {
+				perror("Error: strdup");
+
+				inclReleaseMemObject(memory->page);
+
+				free(memory);
+
+				return INACCEL_FAILED;
+			}
+		} else {
+			if (!(memory->type = strdup((char *) memory->resource->mem_topology->m_mem_data[memory->index].m_tag))) {
+				perror("Error: strdup");
+
+				inclReleaseMemObject(memory->page);
+
+				free(memory);
+
+				return INACCEL_FAILED;
+			}
+
+			char *brackets = strpbrk(memory->type, "[]");
+			if (brackets) {
+				*brackets = 0;
 			}
 		}
 
 		return memory;
-	} else return NULL;
+	}
+	return NULL;
 }
 
 cl_resource create_resource(unsigned int index) {
 	cl_resource resource = (cl_resource) calloc(1, sizeof(struct _cl_resource));
-	if (!resource) return INACCEL_FAILED;
+	if (!resource) {
+		perror("Error: calloc");
+
+		return INACCEL_FAILED;
+	}
+
+	resource->index = index;
 
 	if (!(resource->platform_id = inclGetPlatformID("Xilinx"))) {
 		free(resource);
+
 		return NULL;
 	}
 
-	if (!(resource->device_id = inclGetDeviceID(resource->platform_id, index))) {
+	if (!(resource->device_id = inclGetDeviceID(resource->platform_id, resource->index))) {
 		free(resource);
+
 		return NULL;
 	}
 
 	if (!(resource->context = inclCreateContext(resource->device_id))) {
 		free(resource);
+
 		return INACCEL_FAILED;
 	}
 
 	if (!(resource->vendor = strdup("xilinx"))) {
 		perror("Error: strdup");
+
 		inclReleaseContext(resource->context);
+
 		free(resource);
+
 		return INACCEL_FAILED;
 	}
 
 	size_t raw_name_size;
-	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, 0, NULL, &raw_name_size);
+	if (inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, 0, NULL, &raw_name_size)) {
+		inclReleaseContext(resource->context);
+
+		free(resource);
+
+		return INACCEL_FAILED;
+	}
 
 	char *raw_name = (char *) calloc(raw_name_size, sizeof(char));
 	if (!raw_name) {
 		perror("Error: calloc");
-		free(resource->vendor);
+
 		inclReleaseContext(resource->context);
+
+		free(resource->vendor);
 		free(resource);
+
 		return INACCEL_FAILED;
 	}
 
-	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, raw_name_size, raw_name, NULL);
-
-	resource->name = (char *) calloc(raw_name_size, sizeof(char));
-	if (!resource->name) {
-		perror("Error: calloc");
+	if (inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, raw_name_size, raw_name, NULL)) {
 		free(raw_name);
-		free(resource->vendor);
+
 		inclReleaseContext(resource->context);
+
+		free(resource->vendor);
 		free(resource);
+
 		return INACCEL_FAILED;
 	}
 
-	resource->version = (char *) calloc(raw_name_size, sizeof(char));
-	if (!resource->version) {
+	if (!(resource->name = (char *) calloc(raw_name_size, sizeof(char)))) {
 		perror("Error: calloc");
+
+		free(raw_name);
+
+		inclReleaseContext(resource->context);
+
+		free(resource->vendor);
+		free(resource);
+
+		return INACCEL_FAILED;
+	}
+
+	if (!(resource->version = (char *) calloc(raw_name_size, sizeof(char)))) {
+		perror("Error: calloc");
+
+		free(raw_name);
+
+		inclReleaseContext(resource->context);
+
 		free(resource->name);
-		free(raw_name);
 		free(resource->vendor);
-		inclReleaseContext(resource->context);
 		free(resource);
+
 		return INACCEL_FAILED;
 	}
 
@@ -253,121 +439,202 @@ cl_resource create_resource(unsigned int index) {
 
 	if (regcomp(&compile, regex, REG_EXTENDED)) {
 		perror("Error: regcomp");
-		free(resource->version);
-		free(resource->name);
+
 		free(raw_name);
-		free(resource->vendor);
+
 		inclReleaseContext(resource->context);
+
+		free(resource->name);
+		free(resource->vendor);
+		free(resource->version);
 		free(resource);
+
 		return INACCEL_FAILED;
 	}
 
-	if (!regexec(&compile, raw_name, 5, group, 0)) {
-		strncpy(resource->name, raw_name + group[1].rm_so, group[1].rm_eo - group[1].rm_so);
-
-		strncpy(resource->version, raw_name + group[2].rm_so, group[2].rm_eo - group[2].rm_so);
-		strcat(resource->version, "_");
-		strncat(resource->version, raw_name + group[3].rm_so, group[3].rm_eo - group[3].rm_so);
-		strcat(resource->version, ".");
-		strncat(resource->version, raw_name + group[4].rm_so, group[4].rm_eo - group[4].rm_so);
-	} else {
+	if (regexec(&compile, raw_name, 5, group, 0)) {
 		perror("Error: regexec");
-		free(resource->version);
-		free(resource->name);
+
+		regfree(&compile);
+
 		free(raw_name);
-		free(resource->vendor);
+
 		inclReleaseContext(resource->context);
+
+		free(resource->name);
+		free(resource->vendor);
+		free(resource->version);
 		free(resource);
+
 		return INACCEL_FAILED;
 	}
+
+	strncpy(resource->name, raw_name + group[1].rm_so, group[1].rm_eo - group[1].rm_so);
+
+	strncpy(resource->version, raw_name + group[2].rm_so, group[2].rm_eo - group[2].rm_so);
+	strcat(resource->version, "_");
+	strncat(resource->version, raw_name + group[3].rm_so, group[3].rm_eo - group[3].rm_so);
+	strcat(resource->version, ".");
+	strncat(resource->version, raw_name + group[4].rm_so, group[4].rm_eo - group[4].rm_so);
 
 	regfree(&compile);
 
 	free(raw_name);
 
 	glob_t dev;
-	int glob_ret;
-	unsigned idx = 0;
+	if (glob("/sys/bus/pci/drivers/{xocl,xuser}/*:*:*.*", GLOB_BRACE, NULL, &dev)) {
+		perror("Error: glob");
 
-	if (!(glob_ret = glob("/sys/bus/pci/drivers/{xocl,xuser}/*:*:*.*", GLOB_BRACE, NULL, &dev))) {
-		size_t i;
-		for (i = dev.gl_pathc; i > 0; i--) {
-			char temp_dev[PATH_MAX / 2] = {0};
-			if (readlink(dev.gl_pathv[i - 1], temp_dev, sizeof(temp_dev) - 1) == 1)
-				return resource;
-
-			char path[PATH_MAX];
-			sprintf(path, "%s/%s/ready", dirname(dev.gl_pathv[i - 1]), temp_dev);
-
-			FILE *ready_file = fopen(path, "r");
-			if (!ready_file) break;
-
-			unsigned ready;
-			if(fscanf(ready_file, "0x%d", &ready) <= 0) continue;
-
-			fclose(ready_file);
-
-			if (ready) {
-				if (idx == index) {
-					resource->root_path = strdup(dirname(path));
-
-					break;
-				}
-				else idx++;
-			}
-		}
-		globfree(&dev);
-
-		if (!i) glob_ret = GLOB_NOMATCH;
-	} else perror("Error: glob");
-
-	if (!resource->root_path) {
-		// No device found in the filesystem or error in glob
-		fprintf(stderr, "Error: NULL root_path\n");
-		free(resource->version);
-		free(resource->name);
-		free(raw_name);
-		free(resource->vendor);
 		inclReleaseContext(resource->context);
+
+		free(resource->name);
+		free(resource->vendor);
+		free(resource->version);
 		free(resource);
-		if (glob_ret == GLOB_NOMATCH) return NULL;
-		else return INACCEL_FAILED;
+
+		return INACCEL_FAILED;
 	}
 
-	char path[PATH_MAX];
-	if (sprintf(path, "%s/xmc.*", resource->root_path) < 0) return resource;
+	unsigned int dev_index = 0;
 
-	glob_t xmc;
-	if (!glob(path, GLOB_NOSORT, NULL, &xmc)) {
-		sprintf(path, "%s/%s", xmc.gl_pathv[0], "xmc_fpga_temp");
-		resource->temperature = strdup(path);
+	size_t i;
+	for (i = dev.gl_pathc - 1; i >= 0; i--) {
+		char ready_path[PATH_MAX];
+		if (sprintf(ready_path, "%s/ready", dev.gl_pathv[i]) < 0) {
+			perror("Error: sprintf");
 
-		sprintf(path, "%s/%s", xmc.gl_pathv[0], "xmc_power");
-		resource->power = strdup(path);
+			globfree(&dev);
 
-		sprintf(path, "%s/%s", xmc.gl_pathv[0], "serial_num");
-		FILE *serial = fopen(path, "r");
-		if (serial) {
-			char serial_no[50];
-			serial_no[0] = '\0';
+			inclReleaseContext(resource->context);
 
-			if (fscanf(serial,"%s", serial_no)) {
-				resource->serial_no = strdup(serial_no);
-			}
+			free(resource->name);
+			free(resource->vendor);
+			free(resource->version);
+			free(resource);
 
-			fclose(serial);
+			return INACCEL_FAILED;
 		}
 
-		globfree(&xmc);
+		FILE *ready_stream = fopen(ready_path, "r");
+		if (!ready_stream) {
+			perror("Error: fopen");
+
+			globfree(&dev);
+
+			inclReleaseContext(resource->context);
+
+			free(resource->name);
+			free(resource->vendor);
+			free(resource->version);
+			free(resource);
+
+			return INACCEL_FAILED;
+		}
+
+		unsigned int ready;
+		if (fscanf(ready_stream, "0x%d", &ready) == EOF) {
+			perror("Error: fscanf");
+
+			fclose(ready_stream);
+
+			globfree(&dev);
+
+			inclReleaseContext(resource->context);
+
+			free(resource->name);
+			free(resource->vendor);
+			free(resource->version);
+			free(resource);
+
+			return INACCEL_FAILED;
+		}
+
+		fclose(ready_stream);
+
+		if (ready) {
+			if (index == dev_index) {
+				if (!(resource->root_path = strdup(dev.gl_pathv[i]))) {
+					perror("Error: strdup");
+
+					globfree(&dev);
+
+					inclReleaseContext(resource->context);
+
+					free(resource->name);
+					free(resource->vendor);
+					free(resource->version);
+					free(resource);
+
+					return INACCEL_FAILED;
+				}
+
+				break;
+			} else {
+				dev_index++;
+			}
+		}
+	}
+
+	globfree(&dev);
+
+	if (!resource->root_path) {
+		inclReleaseContext(resource->context);
+
+		free(resource->name);
+		free(resource->vendor);
+		free(resource->version);
+		free(resource);
+
+		return INACCEL_FAILED;
+	}
+
+	char xmc_pattern[PATH_MAX];
+	if (sprintf(xmc_pattern, "%s/xmc.*", resource->root_path) >= 0) {
+		glob_t xmc;
+		if (!glob(xmc_pattern, GLOB_NOSORT, NULL, &xmc)) {
+			char serial_num_path[PATH_MAX];
+			if (sprintf(serial_num_path, "%s/serial_num", xmc.gl_pathv[0]) > 0) {
+				FILE *serial_num_stream = fopen(serial_num_path, "r");
+				if (serial_num_stream) {
+					fseek(serial_num_stream, 0, SEEK_END);
+
+					char *serial_no = (char *) calloc(1, ftell(serial_num_stream) + 1);
+					if (serial_no) {
+						fseek(serial_num_stream, 0, SEEK_SET);
+
+						if (fscanf(serial_num_stream, "%s", serial_no) != EOF) {
+							resource->serial_no = strdup(serial_no);
+						}
+					}
+
+					fclose(serial_num_stream);
+				}
+			}
+
+			globfree(&xmc);
+		}
+	}
+
+	if (pthread_create(&resource->thread, NULL, &sensor_routine, resource)) {
+		perror("Error: pthread_create");
+
+		inclReleaseContext(resource->context);
+
+		free(resource->name);
+		free(resource->root_path);
+		free(resource->serial_no);
+		free(resource->vendor);
+		free(resource->version);
+		free(resource);
+
+		return INACCEL_FAILED;
 	}
 
 	return resource;
 }
 
 size_t get_memory_size(cl_memory memory) {
-	if (memory->resource->topology->m_mem_data[memory->id].m_used) {
-		return memory->resource->topology->m_mem_data[memory->id].m_size * 1024 - 4096; // minus page_buf size
-	} else return 0;
+	return memory->size;
 }
 
 char *get_memory_type(cl_memory memory) {
@@ -379,25 +646,7 @@ char *get_resource_name(cl_resource resource) {
 }
 
 float get_resource_power(cl_resource resource) {
-	if (resource->power) {
-		FILE *power_file = fopen(resource->power, "r");
-
-		if (power_file) {
-			char tmp[10] = {0};
-
-			int ret = fscanf(power_file, "%s", tmp);
-			fclose(power_file);
-
-			if(ret != EOF) {
-				// Power is obtained in uWatts so we convert it to Watts
-				float value = ((double) strtoul(tmp, NULL, 10)) / 1000000;
-
-				return value;
-			}
-		}
-	}
-
-	return -1.0f;
+	return resource->power;
 }
 
 char *get_resource_serial_no(cl_resource resource) {
@@ -405,22 +654,7 @@ char *get_resource_serial_no(cl_resource resource) {
 }
 
 float get_resource_temperature(cl_resource resource) {
-	if (resource->temperature) {
-		FILE *temp_file = fopen(resource->temperature, "r");
-
-		if (temp_file) {
-			char temperature[4] = {0};
-
-			int ret = fscanf(temp_file, "%s", temperature);
-			fclose(temp_file);
-
-			if(ret != EOF) {
-				return strtof(temperature, NULL);
-			}
-		}
-	}
-
-	return -1.0f;
+	return resource->temperature;
 }
 
 char *get_resource_vendor(cl_resource resource) {
@@ -432,50 +666,115 @@ char *get_resource_version(cl_resource resource) {
 }
 
 int program_resource_with_binary(cl_resource resource, size_t size, const void *binary) {
-	if (resource->program) if (inclReleaseProgram(resource->program)) return EXIT_FAILURE;
-
-	if (!(resource->program = inclCreateProgramWithBinary(resource->context, resource->device_id, size, binary))) return EXIT_FAILURE;
-
-	if (inclBuildProgram(resource->program)) {
+	if (resource->program) {
 		inclReleaseProgram(resource->program);
+		resource->program = NULL;
+	}
+
+	free(resource->mem_topology);
+	resource->mem_topology = NULL;
+
+	if (!(resource->program = inclCreateProgramWithBinary(resource->context, resource->device_id, size, binary))) {
 		return EXIT_FAILURE;
 	}
 
-	// mem_topology changes every time we program the device
-	if (resource->topology) free(resource->topology);
-
-	char path[PATH_MAX];
-	if(sprintf(path, "%s/icap.*", resource->root_path) < 0) {
+	if (inclBuildProgram(resource->program)) {
 		inclReleaseProgram(resource->program);
+		resource->program = NULL;
+
+		return EXIT_FAILURE;
+	}
+
+	char icap_pattern[PATH_MAX];
+	if (sprintf(icap_pattern, "%s/icap.*", resource->root_path) < 0) {
+		perror("Error: sprintf");
+
+		inclReleaseProgram(resource->program);
+		resource->program = NULL;
+
 		return EXIT_FAILURE;
 	}
 
 	glob_t icap;
-	if (!glob(path, GLOB_NOSORT, NULL, &icap)) {
-		sprintf(path, "%s/%s", icap.gl_pathv[0], "mem_topology");
-		globfree(&icap);
+	if (glob(icap_pattern, GLOB_NOSORT, NULL, &icap)) {
+		perror("Error: glob");
 
-		FILE *mem_topology = fopen(path, "r");
-		if (mem_topology) {
-			//PATH_MAX bytes should be sufficient for mem_topology
-			resource->topology = (struct mem_topology *) malloc(PATH_MAX);
-			size_t topology_bytes = fread(resource->topology, sizeof(char), PATH_MAX, mem_topology);
+		inclReleaseProgram(resource->program);
+		resource->program = NULL;
 
-			fclose(mem_topology);
-
-			if (topology_bytes) return EXIT_SUCCESS;
-		}
+		return EXIT_FAILURE;
 	}
 
-	perror("Error: glob");
-	inclReleaseProgram(resource->program);
-	free(resource->topology);
-	return EXIT_FAILURE;
+	char mem_topology_path[PATH_MAX];
+	if (sprintf(mem_topology_path, "%s/mem_topology", icap.gl_pathv[0]) < 0) {
+		perror("Error: sprintf");
+
+		globfree(&icap);
+
+		inclReleaseProgram(resource->program);
+		resource->program = NULL;
+
+		return EXIT_FAILURE;
+	}
+
+	globfree(&icap);
+
+	FILE *mem_topology_stream = fopen(mem_topology_path, "r");
+	if (!mem_topology_stream) {
+		perror("Error: fopen");
+
+		inclReleaseProgram(resource->program);
+		resource->program = NULL;
+
+		return EXIT_FAILURE;
+	}
+
+	int32_t m_count;
+	if (fread(&m_count, sizeof(int32_t), 1, mem_topology_stream) != 1) {
+		perror("Error: fread");
+
+		fclose(mem_topology_stream);
+
+		inclReleaseProgram(resource->program);
+		resource->program = NULL;
+
+		return EXIT_FAILURE;
+	}
+
+	fseek(mem_topology_stream, 0, SEEK_SET);
+
+	if (!(resource->mem_topology = (struct mem_topology *) calloc(1, offsetof(struct mem_topology, m_mem_data) + m_count * sizeof(struct mem_data)))) {
+		perror("Error: calloc");
+
+		fclose(mem_topology_stream);
+
+		inclReleaseProgram(resource->program);
+		resource->program = NULL;
+
+		return EXIT_FAILURE;
+	}
+
+	if (fread(resource->mem_topology, offsetof(struct mem_topology, m_mem_data) + m_count * sizeof(struct mem_data), 1, mem_topology_stream) != 1) {
+		perror("Error: fread");
+
+		fclose(mem_topology_stream);
+
+		inclReleaseProgram(resource->program);
+		resource->program = NULL;
+
+		free(resource->mem_topology);
+		resource->mem_topology = NULL;
+
+		return EXIT_FAILURE;
+	}
+
+	fclose(mem_topology_stream);
+
+	return EXIT_SUCCESS;
 }
 
 void release_buffer(cl_buffer buffer) {
 	inclReleaseCommandQueue(buffer->command_queue);
-
 	inclReleaseMemObject(buffer->mem);
 
 	free(buffer);
@@ -483,56 +782,58 @@ void release_buffer(cl_buffer buffer) {
 
 void release_compute_unit(cl_compute_unit compute_unit) {
 	inclReleaseCommandQueue(compute_unit->command_queue);
-
 	inclReleaseKernel(compute_unit->kernel);
 
-	free(compute_unit->args);
-
+	free(compute_unit->memory);
+	free(compute_unit->name);
 	free(compute_unit);
 }
 
 void release_memory(cl_memory memory) {
-	inclReleaseMemObject(memory->page_buf);
+	inclReleaseMemObject(memory->page);
 
 	free(memory->type);
-
 	free(memory);
 }
 
 void release_resource(cl_resource resource) {
+	resource->release = 1;
+	pthread_join(resource->thread, NULL);
+
 	if (resource->program) {
-		free(resource->topology);
 		inclReleaseProgram(resource->program);
 	}
-
-	if (resource->temperature) free(resource->temperature);
-	if (resource->power) free(resource->power);
-	if (resource->serial_no) free(resource->serial_no);
-
-	free(resource->name);
-	free(resource->root_path);
-	free(resource->vendor);
-	free(resource->version);
-
 	inclReleaseContext(resource->context);
 
+	free(resource->mem_topology);
+	free(resource->name);
+	free(resource->root_path);
+	free(resource->serial_no);
+	free(resource->vendor);
+	free(resource->version);
 	free(resource);
 }
 
 int run_compute_unit(cl_compute_unit compute_unit) {
-	int ret = inclEnqueueTask(compute_unit->command_queue, compute_unit->kernel);
+	if (inclEnqueueTask(compute_unit->command_queue, compute_unit->kernel)) {
+		return EXIT_FAILURE;
+	}
 
-	cl_uint num_arguments;
-	inclGetKernelInfo(compute_unit->kernel, CL_KERNEL_NUM_ARGS, sizeof(cl_uint), &num_arguments, NULL);
+	unsigned int num_args;
+	if (inclGetKernelInfo(compute_unit->kernel, CL_KERNEL_NUM_ARGS, sizeof(unsigned int), &num_args, NULL)) {
+		return EXIT_FAILURE;
+	}
 
-	int index;
-	for (index = 0; index < num_arguments; index++) {
-		if (compute_unit->args[index]) {
-			inclSetKernelArg(compute_unit->kernel, index, sizeof(cl_mem), &compute_unit->args[index]);
+	unsigned int index;
+	for (index = 0; index < num_args; index++) {
+		if (compute_unit->memory[index]) {
+			if (inclSetKernelArg(compute_unit->kernel, index, sizeof(cl_mem), &compute_unit->memory[index]->page)) {
+				return EXIT_FAILURE;
+			};
 		}
 	}
 
-	return ret;
+	return EXIT_SUCCESS;
 }
 
 int set_compute_unit_arg(cl_compute_unit compute_unit, unsigned int index, size_t size, const void *value) {
@@ -541,7 +842,7 @@ int set_compute_unit_arg(cl_compute_unit compute_unit, unsigned int index, size_
 	} else {
 		cl_buffer buffer = (cl_buffer) value;
 
-		if(!compute_unit->args[index]) compute_unit->args[index] = buffer->memory->page_buf;
+		compute_unit->memory[index] = buffer->memory;
 
 		return inclSetKernelArg(compute_unit->kernel, index, sizeof(cl_mem), &buffer->mem);
 	}

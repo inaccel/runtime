@@ -1,76 +1,119 @@
 #include <glob.h>
+#include <inaccel/runtime.h>
 #include <libgen.h>
 #include <limits.h>
+#include <pthread.h>
 #include <regex.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
 #include "INCL/opencl.h"
-#include <inaccel/runtime.h>
 
 struct _cl_buffer {
-	void *ptr;
+	cl_memory memory;
 	size_t size;
+	void *host;
+
 	cl_command_queue command_queue;
 	cl_mem mem;
 };
 
 struct _cl_compute_unit {
+	cl_resource resource;
+	char *name;
+
 	cl_command_queue command_queue;
 	cl_kernel kernel;
 };
 
 struct _cl_memory {
-	unsigned int id;
 	cl_resource resource;
+	unsigned int index;
+
 	size_t size;
 	char *type;
 };
 
 struct _cl_resource {
-	// Virtual device variables
+	unsigned int index;
+
+	char *name;
+	float power;
+	char *serial_no;
+	float temperature;
+	char *vendor;
+	char *version;
+
 	cl_context context;
 	cl_device_id device_id;
 	cl_platform_id platform_id;
 	cl_program program;
 
-	// Physical device variables
-	char *name;
+	pthread_t thread;
+	unsigned char release;
 	char *root_path;
-	char *vendor;
-	char *version;
-
-	char *temperature;
-	char *sdr;
-	char *sensors;
 };
 
-#define SIGN_EXT(val, bitpos) (((val) ^ (1 << (bitpos))) - (1 << (bitpos)))
+float get_power(char *sdr_path, char *sensors_path) {
+	#define SIGN_EXT(val, bitpos) (((val) ^ (1 << (bitpos))) - (1 << (bitpos)))
 
-float intel_get_power(cl_resource resource) {
 	unsigned char calc_params[6];
 	unsigned char reading;
 
-	if(!resource->sdr || !resource->sensors) return -1.0f;
+	FILE *sdr_stream = fopen(sdr_path, "r");
+	if (!sdr_stream) {
+		perror("Error: fopen");
 
-	FILE *sdr_file = fopen(resource->sdr, "r");
-	FILE *sensors_file = fopen(resource->sensors, "r");
+		return 0.0f;
+	}
 
-	if (!sdr_file || !sensors_file) return -1.0f;
+	FILE *sensors_stream = fopen(sensors_path, "r");
+	if (!sensors_stream) {
+		perror("Error: fopen");
 
-	if (fseek(sdr_file, 24, SEEK_SET)) return -1.0f;
+		fclose(sdr_stream);
 
-	int ret;
-	if(!(ret = fread(calc_params, sizeof(char), 6, sdr_file))) return -1.0f;
+		return 0.0f;
+	}
 
-	fclose(sdr_file);
+	if (fseek(sdr_stream, 24, SEEK_SET)) {
+		perror("Error: fseek");
 
-	if (fseek(sensors_file, 4, SEEK_SET)) return -1.0f;
+		fclose(sdr_stream);
+		fclose(sensors_stream);
 
-	if(!(ret = fread(&reading, sizeof(char), 1, sensors_file))) return -1.0f;
+		return 0.0f;
+	}
 
-	fclose(sensors_file);
+	if (fread(calc_params, sizeof(unsigned char), 6, sdr_stream) != 6) {
+		perror("Error: fread");
+
+		fclose(sdr_stream);
+		fclose(sensors_stream);
+
+		return 0.0f;
+	}
+
+	fclose(sdr_stream);
+
+	if (fseek(sensors_stream, 4, SEEK_SET)) {
+		perror("Error: fseek");
+
+		fclose(sensors_stream);
+
+		return 0.0f;
+	}
+
+	if (fread(&reading, sizeof(unsigned char), 1, sensors_stream) != 1) {
+		perror("Error: fread");
+
+		fclose(sensors_stream);
+
+		return 0.0f;
+	}
+
+	fclose(sensors_stream);
 
 	int32_t B_val = ((calc_params[3] >> 6 & 0x3) << 8) | calc_params[2];
 	B_val = SIGN_EXT(B_val, 9);
@@ -87,12 +130,13 @@ float intel_get_power(cl_resource resource) {
 	double M = M_val;
 	double B = B_val;
 
-	int i;
 	if (B_exp >= 0) {
+		int i;
 		for (i = 0; i < B_exp; i++) {
 			B *= 10.0;
 		}
 	} else {
+		int i;
 		for (i = B_exp; i; i++) {
 			B /= 10.0;
 		}
@@ -101,16 +145,85 @@ float intel_get_power(cl_resource resource) {
 	double sensor_value = M * reading + B;
 
 	if (R_exp >= 0) {
+		int i;
 		for (i = 0; i < R_exp; i++) {
 			sensor_value *= 10.0;
 		}
 	} else {
+		int i;
 		for (i = R_exp; i; i++) {
 			sensor_value /= 10.0;
 		}
 	}
 
 	return sensor_value;
+}
+
+float get_temperature(char *temperature_path) {
+	FILE *temperature_stream = fopen(temperature_path, "r");
+	if (temperature_stream) {
+		float temperature;
+		int ret = fscanf(temperature_stream, "%f", &temperature);
+		fclose(temperature_stream);
+		if (ret != EOF) {
+			return temperature;
+		}
+	}
+	return 0.0f;
+}
+
+void *sensor_routine(void *arg) {
+	cl_resource resource = (cl_resource) arg;
+
+	char sdr_path[PATH_MAX] = {0};
+	char sensors_path[PATH_MAX] = {0};
+	char temperature_path[PATH_MAX] = {0};
+
+	char bmc_pattern[PATH_MAX];
+	if (sprintf(bmc_pattern, "%s/avmmi-bmc.*.auto/bmc_info", resource->root_path) >= 0) {
+		glob_t bmc;
+		if (!glob(bmc_pattern, GLOB_NOSORT, NULL, &bmc)) {
+			sprintf(sdr_path, "%s/sdr", bmc.gl_pathv[0]);
+			sprintf(sensors_path, "%s/sensors", bmc.gl_pathv[0]);
+			globfree(&bmc);
+		}
+	}
+	sprintf(temperature_path, "%s/thermal_mgmt/temperature", resource->root_path);
+
+	if ((!strlen(sdr_path) || !strlen(sensors_path)) && !strlen(temperature_path)) {
+		return NULL;
+	}
+
+	for (;;) {
+		if (resource->release) {
+			return NULL;
+		}
+
+		#define SEC_TO_USEC(sec) ((sec) * 1000000)
+		#define NSEC_TO_USEC(nsec) ((nsec) / 1000)
+
+		struct timespec tp;
+
+		clock_gettime(CLOCK_MONOTONIC, &tp);
+		unsigned long start = SEC_TO_USEC((unsigned long) tp.tv_sec) + NSEC_TO_USEC((unsigned long) tp.tv_nsec);
+
+		if (strlen(sdr_path) && strlen(sensors_path)) {
+			resource->power = get_power(sdr_path, sensors_path);
+		}
+		if (strlen(temperature_path)) {
+			resource->temperature = get_temperature(temperature_path);
+		}
+
+		clock_gettime(CLOCK_MONOTONIC, &tp);
+		unsigned long stop = SEC_TO_USEC((unsigned long) tp.tv_sec) + NSEC_TO_USEC((unsigned long) tp.tv_nsec);
+
+		unsigned long usec = stop - start;
+		if (usec < 999999) {
+			usleep(999999 - usec);
+		}
+	}
+
+	return NULL;
 }
 
 int await_buffer_copy(cl_buffer buffer) {
@@ -122,30 +235,36 @@ int await_compute_unit_run(cl_compute_unit compute_unit) {
 }
 
 int copy_from_buffer(cl_buffer buffer) {
-	return inclEnqueueReadBuffer(buffer->command_queue, buffer->mem, 0, buffer->size, buffer->ptr);
+	return inclEnqueueReadBuffer(buffer->command_queue, buffer->mem, 0, buffer->size, buffer->host);
 }
 
 int copy_to_buffer(cl_buffer buffer) {
-	return inclEnqueueWriteBuffer(buffer->command_queue, buffer->mem, 0, buffer->size, buffer->ptr);
+	return inclEnqueueWriteBuffer(buffer->command_queue, buffer->mem, 0, buffer->size, buffer->host);
 }
 
 cl_buffer create_buffer(cl_memory memory, size_t size, void *host) {
-	cl_uint CL_MEMORY = memory->id << 16;
-
 	cl_buffer buffer = (cl_buffer) calloc(1, sizeof(struct _cl_buffer));
-	if (!buffer) return INACCEL_FAILED;
+	if (!buffer) {
+		perror("Error: calloc");
 
+		return INACCEL_FAILED;
+	}
+
+	buffer->memory = memory;
 	buffer->size = size;
-	buffer->ptr = host;
+	buffer->host = host;
 
-	if (!(buffer->mem = inclCreateBuffer(memory->resource->context, CL_MEM_READ_WRITE | CL_MEMORY, size, NULL))) {
+	if (!(buffer->mem = inclCreateBuffer(memory->resource->context, CL_MEM_READ_WRITE, buffer->size, NULL))) {
 		free(buffer);
+
 		return NULL;
 	}
 
 	if (!(buffer->command_queue = inclCreateCommandQueue(memory->resource->context, memory->resource->device_id))) {
 		inclReleaseMemObject(buffer->mem);
+
 		free(buffer);
+
 		return INACCEL_FAILED;
 	}
 
@@ -154,16 +273,34 @@ cl_buffer create_buffer(cl_memory memory, size_t size, void *host) {
 
 cl_compute_unit create_compute_unit(cl_resource resource, const char *name) {
 	cl_compute_unit compute_unit = (cl_compute_unit) calloc(1, sizeof(struct _cl_compute_unit));
-	if (!compute_unit) return INACCEL_FAILED;
+	if (!compute_unit) {
+		perror("Error: calloc");
 
-	if (!(compute_unit->kernel = inclCreateKernel(resource->program, name))) {
+		return INACCEL_FAILED;
+	}
+
+	compute_unit->resource = resource;
+	if (!(compute_unit->name = strdup(name))) {
+		perror("Error: strdup");
+
 		free(compute_unit);
+
+		return INACCEL_FAILED;
+	}
+
+	if (!(compute_unit->kernel = inclCreateKernel(resource->program, compute_unit->name))) {
+		free(compute_unit->name);
+		free(compute_unit);
+
 		return NULL;
 	}
 
 	if (!(compute_unit->command_queue = inclCreateCommandQueue(resource->context, resource->device_id))) {
 		inclReleaseKernel(compute_unit->kernel);
+
+		free(compute_unit->name);
 		free(compute_unit);
+
 		return INACCEL_FAILED;
 	}
 
@@ -171,67 +308,116 @@ cl_compute_unit create_compute_unit(cl_resource resource, const char *name) {
 }
 
 cl_memory create_memory(cl_resource resource, unsigned int index) {
-	// Intel has only one memory (for now)
 	if (!index) {
 		cl_memory memory = (cl_memory) calloc(1, sizeof(struct _cl_memory));
-		if (!memory) return INACCEL_FAILED;
+		if (!memory) {
+			perror("Error: calloc");
 
-		memory->id = index;
+			return INACCEL_FAILED;
+		}
+
 		memory->resource = resource;
-		inclGetDeviceInfo(resource->device_id, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(memory->size), &memory->size, NULL);
-		memory->type = strdup("DDR");
+		memory->index = index;
+
+		if (inclGetDeviceInfo(resource->device_id, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(size_t), &memory->size, NULL)) {
+			free(memory);
+
+			return INACCEL_FAILED;
+		}
+
+		if (!(memory->type = strdup("DDR"))) {
+			perror("Error: strdup");
+
+			free(memory);
+
+			return INACCEL_FAILED;
+		}
 
 		return memory;
-	} else return NULL;
+	}
+	return NULL;
 }
 
 cl_resource create_resource(unsigned int index) {
 	cl_resource resource = (cl_resource) calloc(1, sizeof(struct _cl_resource));
-	if (!resource) return INACCEL_FAILED;
+	if (!resource) {
+		perror("Error: calloc");
+
+		return INACCEL_FAILED;
+	}
+
+	resource->index = index;
 
 	if (!(resource->platform_id = inclGetPlatformID("Intel"))) {
 		free(resource);
+
 		return NULL;
 	}
 
-	if (!(resource->device_id = inclGetDeviceID(resource->platform_id, index))) {
+	if (!(resource->device_id = inclGetDeviceID(resource->platform_id, resource->index))) {
 		free(resource);
+
 		return NULL;
 	}
 
 	if (!(resource->context = inclCreateContext(resource->device_id))) {
 		free(resource);
+
 		return INACCEL_FAILED;
 	}
 
 	if (!(resource->vendor = strdup("intel"))) {
 		perror("Error: strdup");
+
 		inclReleaseContext(resource->context);
+
 		free(resource);
+
 		return INACCEL_FAILED;
 	}
 
 	size_t raw_name_size;
-	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, 0, NULL, &raw_name_size);
+	if (inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, 0, NULL, &raw_name_size)) {
+		inclReleaseContext(resource->context);
+
+		free(resource);
+
+		return INACCEL_FAILED;
+	}
 
 	char *raw_name = (char *) calloc(raw_name_size, sizeof(char));
 	if (!raw_name) {
 		perror("Error: calloc");
-		free(resource->vendor);
+
 		inclReleaseContext(resource->context);
+
+		free(resource->vendor);
 		free(resource);
+
 		return INACCEL_FAILED;
 	}
 
-	inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, raw_name_size, raw_name, NULL);
-
-	resource->name = (char *) calloc(raw_name_size, sizeof(char));
-	if (!resource->name) {
-		perror("Error: calloc");
+	if (inclGetDeviceInfo(resource->device_id, CL_DEVICE_NAME, raw_name_size, raw_name, NULL)) {
 		free(raw_name);
-		free(resource->vendor);
+
 		inclReleaseContext(resource->context);
+
+		free(resource->vendor);
 		free(resource);
+
+		return INACCEL_FAILED;
+	}
+
+	if (!(resource->name = (char *) calloc(raw_name_size, sizeof(char)))) {
+		perror("Error: calloc");
+
+		free(raw_name);
+
+		inclReleaseContext(resource->context);
+
+		free(resource->vendor);
+		free(resource);
+
 		return INACCEL_FAILED;
 	}
 
@@ -242,146 +428,245 @@ cl_resource create_resource(unsigned int index) {
 
 	if (regcomp(&compile, regex, REG_EXTENDED)) {
 		perror("Error: regcomp");
-		free(resource->name);
+
 		free(raw_name);
-		free(resource->vendor);
+
 		inclReleaseContext(resource->context);
+
+		free(resource->name);
+		free(resource->vendor);
 		free(resource);
+
 		return INACCEL_FAILED;
 	}
 
-	long int major, minor;
-
-	if (!regexec(&compile, raw_name, 4, group, 0)) {
-		strncpy(resource->name, raw_name + group[1].rm_so, group[1].rm_eo - group[1].rm_so);
-
-		char *tmp;
-
-		tmp = strndup(raw_name + group[2].rm_so, group[2].rm_eo - group[2].rm_so);
-		if (!tmp) {
-			perror("Error: strndup");
-			free(resource->name);
-			free(raw_name);
-			free(resource->vendor);
-			inclReleaseContext(resource->context);
-			free(resource);
-			return INACCEL_FAILED;
-		}
-		major = strtol(tmp, NULL, 16);
-		free(tmp);
-
-		tmp = strndup(raw_name + group[3].rm_so, group[3].rm_eo - group[3].rm_so);
-		if (!tmp) {
-			perror("Error: strndup");
-			free(resource->name);
-			free(raw_name);
-			free(resource->vendor);
-			inclReleaseContext(resource->context);
-			free(resource);
-			return INACCEL_FAILED;
-		}
-		minor = strtol(tmp, NULL, 16);
-		free(tmp);
-	} else {
+	if (regexec(&compile, raw_name, 4, group, 0)) {
 		perror("Error: regexec");
-		free(resource->name);
+
+		regfree(&compile);
+
 		free(raw_name);
-		free(resource->vendor);
+
 		inclReleaseContext(resource->context);
+
+		free(resource->name);
+		free(resource->vendor);
 		free(resource);
+
 		return INACCEL_FAILED;
 	}
+
+	strncpy(resource->name, raw_name + group[1].rm_so, group[1].rm_eo - group[1].rm_so);
+
+	char *tmp;
+
+	tmp = strndup(raw_name + group[2].rm_so, group[2].rm_eo - group[2].rm_so);
+	if (!tmp) {
+		perror("Error: strndup");
+
+		regfree(&compile);
+
+		free(raw_name);
+
+		inclReleaseContext(resource->context);
+
+		free(resource->name);
+		free(resource->vendor);
+		free(resource);
+
+		return INACCEL_FAILED;
+	}
+	long major = strtol(tmp, NULL, 16);
+	free(tmp);
+
+	tmp = strndup(raw_name + group[3].rm_so, group[3].rm_eo - group[3].rm_so);
+	if (!tmp) {
+		perror("Error: strndup");
+
+		regfree(&compile);
+
+		free(raw_name);
+
+		inclReleaseContext(resource->context);
+
+		free(resource->name);
+		free(resource->vendor);
+		free(resource);
+
+		return INACCEL_FAILED;
+	}
+	long minor = strtol(tmp, NULL, 16);
+	free(tmp);
 
 	regfree(&compile);
 
 	free(raw_name);
 
-	size_t UUID = 32;
+	const size_t UUID = 32;
 
-	resource->version = (char *) calloc((UUID + 1), sizeof(char));
-	if (!resource->version) {
+	if (!(resource->version = (char *) calloc((UUID + 1), sizeof(char)))) {
 		perror("Error: calloc");
+
+		inclReleaseContext(resource->context);
+
 		free(resource->name);
 		free(resource->vendor);
-		inclReleaseContext(resource->context);
 		free(resource);
+
 		return INACCEL_FAILED;
 	}
 
 	glob_t dev;
-	int glob_ret;
-	if (!(glob_ret = glob("/sys/devices/pci*/*/{,/*}/fpga/intel-fpga-dev.*/intel-fpga-port.*/dev", GLOB_NOSORT | GLOB_BRACE, NULL, &dev))) {
-		size_t i;
-		for (i = 0; i < dev.gl_pathc; i++) {
-			long int dev_major;
-			long int dev_minor;
+	if (glob("/sys/devices/pci*/*/{,/*}/fpga/intel-fpga-dev.*/intel-fpga-port.*/dev", GLOB_NOSORT | GLOB_BRACE, NULL, &dev)) {
+		perror("Error: glob");
 
-			FILE *dev_file = fopen(dev.gl_pathv[i], "r");
-			if (!dev_file) {
-				continue;
-			}
-			if (fscanf(dev_file, "%ld:%ld", &dev_major, &dev_minor) == EOF) {
-				continue;
-			}
-			if (fclose(dev_file) == EOF) {
-				continue;
-			}
+		inclReleaseContext(resource->context);
 
-			if ((major == dev_major) && (minor == dev_minor)) {
-				char path[PATH_MAX];
-				sprintf(path, "%s/intel-fpga-fme.*/pr/interface_id", dirname(dirname(dev.gl_pathv[i])));
-
-				glob_t interface_id;
-				if (!(glob_ret = glob(path, GLOB_NOSORT, NULL, &interface_id))) {
-					FILE *interface_id_file = fopen(interface_id.gl_pathv[0], "r");
-					if (!interface_id_file) {
-						break;
-					}
-					if (!fgets(resource->version, UUID + 1, interface_id_file)) {
-						break;
-					}
-					fclose(interface_id_file);
-
-					resource->root_path = strdup(dirname(dirname(interface_id.gl_pathv[0])));
-
-					globfree(&interface_id);
-				} else perror("Error: glob");
-
-				break;
-			}
-		}
-		globfree(&dev);
-
-		if (i == dev.gl_pathc) glob_ret = GLOB_NOMATCH;
-	} else perror("Error: glob");
-
-	if (!strlen(resource->version)) {
-		fprintf(stderr, "Error: strlen\n");
-		free(resource->version);
 		free(resource->name);
 		free(resource->vendor);
-		inclReleaseContext(resource->context);
+		free(resource->version);
 		free(resource);
-		if (glob_ret == GLOB_NOMATCH) return NULL;
-		else return INACCEL_FAILED;
+
+		return INACCEL_FAILED;
 	}
 
-	// temperature and power are optional (at least for now)
-	char path[PATH_MAX];
-	if (sprintf(path, "%s/%s", resource->root_path, "thermal_mgmt/temperature") < 0) return resource;
-	resource->temperature = strdup(path);
+	size_t i;
+	for (i = 0; i < dev.gl_pathc; i++) {
+		long dev_major;
+		long dev_minor;
 
-	if (sprintf(path, "%s/%s", resource->root_path, "avmmi-bmc.*.auto/bmc_info") < 0) return resource;
+		FILE *dev_file = fopen(dev.gl_pathv[i], "r");
+		if (!dev_file) {
+			perror("Error: fopen");
 
-	glob_t bmc;
-	if (!glob(path, GLOB_NOSORT, NULL, &bmc)) {
-		if (sprintf(path, "%s/%s", bmc.gl_pathv[0], "sdr") < 0) return resource;
-		resource->sdr = strdup(path);
+			inclReleaseContext(resource->context);
 
-		if (sprintf(path, "%s/%s", bmc.gl_pathv[0], "sensors") < 0) return resource;
-		resource->sensors = strdup(path);
+			free(resource->name);
+			free(resource->vendor);
+			free(resource->version);
+			free(resource);
 
-		globfree(&bmc);
+			return INACCEL_FAILED;
+		}
+
+		if (fscanf(dev_file, "%ld:%ld", &dev_major, &dev_minor) == EOF) {
+			perror("Error: fscanf");
+
+			fclose(dev_file);
+
+			inclReleaseContext(resource->context);
+
+			free(resource->name);
+			free(resource->vendor);
+			free(resource->version);
+			free(resource);
+
+			return INACCEL_FAILED;
+		}
+
+		fclose(dev_file);
+
+		if ((major == dev_major) && (minor == dev_minor)) {
+			char interface_id_pattern[PATH_MAX];
+			if (sprintf(interface_id_pattern, "%s/intel-fpga-fme.*/pr/interface_id", dirname(dirname(dev.gl_pathv[i]))) < 0) {
+				perror("Error: sprintf");
+
+				globfree(&dev);
+
+				inclReleaseContext(resource->context);
+
+				free(resource->name);
+				free(resource->vendor);
+				free(resource->version);
+				free(resource);
+
+				return INACCEL_FAILED;
+			}
+
+			globfree(&dev);
+
+			glob_t interface_id;
+			if (glob(interface_id_pattern, GLOB_NOSORT, NULL, &interface_id)) {
+				perror("Error: glob");
+
+				inclReleaseContext(resource->context);
+
+				free(resource->name);
+				free(resource->vendor);
+				free(resource->version);
+				free(resource);
+
+				return INACCEL_FAILED;
+			}
+
+			FILE *interface_id_file = fopen(interface_id.gl_pathv[0], "r");
+			if (!interface_id_file) {
+				perror("Error: fopen");
+
+				globfree(&interface_id);
+
+				inclReleaseContext(resource->context);
+
+				free(resource->name);
+				free(resource->vendor);
+				free(resource->version);
+				free(resource);
+
+				return INACCEL_FAILED;
+			}
+
+			if (!fgets(resource->version, UUID + 1, interface_id_file)) {
+				perror("Error: fgets");
+
+				globfree(&interface_id);
+
+				fclose(interface_id_file);
+
+				inclReleaseContext(resource->context);
+
+				free(resource->name);
+				free(resource->vendor);
+				free(resource->version);
+				free(resource);
+
+				return INACCEL_FAILED;
+			}
+
+			fclose(interface_id_file);
+
+			resource->root_path = strdup(dirname(dirname(interface_id.gl_pathv[0])));
+
+			globfree(&interface_id);
+
+			break;
+		}
+
+		globfree(&dev);
+	}
+
+	if (!strlen(resource->version)) {
+		inclReleaseContext(resource->context);
+
+		free(resource->name);
+		free(resource->vendor);
+		free(resource->version);
+		free(resource);
+
+		return NULL;
+	}
+
+	if (pthread_create(&resource->thread, NULL, &sensor_routine, resource)) {
+		perror("Error: pthread_create");
+
+		inclReleaseContext(resource->context);
+
+		free(resource->name);
+		free(resource->root_path);
+		free(resource->vendor);
+		free(resource->version);
+		free(resource);
+
+		return INACCEL_FAILED;
 	}
 
 	return resource;
@@ -400,30 +685,15 @@ char *get_resource_name(cl_resource resource) {
 }
 
 float get_resource_power(cl_resource resource) {
-	return intel_get_power(resource);
+	return resource->power;
 }
 
 char *get_resource_serial_no(cl_resource resource) {
-	return NULL;
+	return resource->serial_no;
 }
 
 float get_resource_temperature(cl_resource resource) {
-	if (resource->temperature) {
-		FILE *temp_file = fopen(resource->temperature, "r");
-
-		if (temp_file) {
-			char temperature[4] = {0};
-
-			int ret = fscanf(temp_file, "%s", temperature);
-			fclose(temp_file);
-
-			if(ret != EOF) {
-				return strtof(temperature, NULL);
-			}
-		}
-	}
-
-	return -1.0f;
+	return resource->temperature;
 }
 
 char *get_resource_vendor(cl_resource resource) {
@@ -435,12 +705,19 @@ char *get_resource_version(cl_resource resource) {
 }
 
 int program_resource_with_binary(cl_resource resource, size_t size, const void *binary) {
-	if (resource->program) if (inclReleaseProgram(resource->program)) return EXIT_FAILURE;
+	if (resource->program) {
+		inclReleaseProgram(resource->program);
+		resource->program = NULL;
+	}
 
-	if (!(resource->program = inclCreateProgramWithBinary(resource->context, resource->device_id, size, binary))) return EXIT_FAILURE;
+	if (!(resource->program = inclCreateProgramWithBinary(resource->context, resource->device_id, size, binary))) {
+		return EXIT_FAILURE;
+	}
 
 	if (inclBuildProgram(resource->program)) {
 		inclReleaseProgram(resource->program);
+		resource->program = NULL;
+
 		return EXIT_FAILURE;
 	}
 
@@ -449,7 +726,6 @@ int program_resource_with_binary(cl_resource resource, size_t size, const void *
 
 void release_buffer(cl_buffer buffer) {
 	inclReleaseCommandQueue(buffer->command_queue);
-
 	inclReleaseMemObject(buffer->mem);
 
 	free(buffer);
@@ -457,32 +733,31 @@ void release_buffer(cl_buffer buffer) {
 
 void release_compute_unit(cl_compute_unit compute_unit) {
 	inclReleaseCommandQueue(compute_unit->command_queue);
-
 	inclReleaseKernel(compute_unit->kernel);
 
+	free(compute_unit->name);
 	free(compute_unit);
 }
 
 void release_memory(cl_memory memory) {
 	free(memory->type);
-
 	free(memory);
 }
 
 void release_resource(cl_resource resource) {
-	if (resource->program) inclReleaseProgram(resource->program);
+	resource->release = 1;
+	pthread_join(resource->thread, NULL);
 
-	if (resource->temperature) free(resource->temperature);
-	if (resource->sdr) free(resource->sdr);
-	if (resource->sensors) free(resource->sensors);
-
+	if (resource->program) {
+		inclReleaseProgram(resource->program);
+	}
 	inclReleaseContext(resource->context);
 
 	free(resource->name);
 	free(resource->root_path);
+	free(resource->serial_no);
 	free(resource->vendor);
 	free(resource->version);
-
 	free(resource);
 }
 

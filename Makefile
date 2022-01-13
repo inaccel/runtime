@@ -7,6 +7,10 @@ CONFIGS = configs
 INCLUDE = include
 SRC = src
 
+all: $(RUNTIMES)
+
+fpga: $(filter %-fpga,$(RUNTIMES))
+
 $(RUNTIMES): $(CONFIGS)/$$@/a.out
 
 define TEMPLATE
