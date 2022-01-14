@@ -259,7 +259,7 @@ int inclFinish(cl_command_queue command_queue) {
 
 /* Obtain specified device, if available. */
 cl_device_id inclGetDeviceID(cl_platform_id platform, cl_uint device_id) {
-	cl_device_id device;
+	cl_device_id device = NULL;
 
 	cl_uint num_devices;
 	inclGetDeviceIDs(platform, 0, NULL, &num_devices);
