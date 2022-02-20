@@ -481,9 +481,23 @@ cl_resource create_resource(unsigned int index) {
 
 	free(raw_name);
 
-	glob_t dev;
-	if (glob("/sys/bus/pci/drivers/{xocl,xuser}/*:*:*.*", GLOB_BRACE, NULL, &dev)) {
-		perror("Error: glob");
+	#define CL_DEVICE_PCIE_BDF 0x1120
+
+	size_t pcie_bdf_size;
+	if (inclGetDeviceInfo(resource->device_id, CL_DEVICE_PCIE_BDF, 0, NULL, &pcie_bdf_size)) {
+		inclReleaseContext(resource->context);
+
+		free(resource->name);
+		free(resource->vendor);
+		free(resource->version);
+		free(resource);
+
+		return INACCEL_FAILED;
+	}
+
+	char *pcie_bdf = (char *) calloc(pcie_bdf_size, sizeof(char));
+	if (!pcie_bdf) {
+		perror("Error: calloc");
 
 		inclReleaseContext(resource->context);
 
@@ -495,89 +509,40 @@ cl_resource create_resource(unsigned int index) {
 		return INACCEL_FAILED;
 	}
 
-	unsigned int dev_index = 0;
+	if (inclGetDeviceInfo(resource->device_id, CL_DEVICE_PCIE_BDF, pcie_bdf_size, pcie_bdf, NULL)) {
+		free(pcie_bdf);
 
-	size_t i;
-	for (i = dev.gl_pathc - 1; i >= 0; i--) {
-		char ready_path[PATH_MAX];
-		if (sprintf(ready_path, "%s/ready", dev.gl_pathv[i]) < 0) {
-			perror("Error: sprintf");
+		inclReleaseContext(resource->context);
 
-			globfree(&dev);
+		free(resource->name);
+		free(resource->vendor);
+		free(resource->version);
+		free(resource);
 
-			inclReleaseContext(resource->context);
-
-			free(resource->name);
-			free(resource->vendor);
-			free(resource->version);
-			free(resource);
-
-			return INACCEL_FAILED;
-		}
-
-		FILE *ready_stream = fopen(ready_path, "r");
-		if (!ready_stream) {
-			perror("Error: fopen");
-
-			globfree(&dev);
-
-			inclReleaseContext(resource->context);
-
-			free(resource->name);
-			free(resource->vendor);
-			free(resource->version);
-			free(resource);
-
-			return INACCEL_FAILED;
-		}
-
-		unsigned int ready;
-		if (fscanf(ready_stream, "0x%d", &ready) == EOF) {
-			perror("Error: fscanf");
-
-			fclose(ready_stream);
-
-			globfree(&dev);
-
-			inclReleaseContext(resource->context);
-
-			free(resource->name);
-			free(resource->vendor);
-			free(resource->version);
-			free(resource);
-
-			return INACCEL_FAILED;
-		}
-
-		fclose(ready_stream);
-
-		if (ready) {
-			if (index == dev_index) {
-				if (!(resource->root_path = strdup(dev.gl_pathv[i]))) {
-					perror("Error: strdup");
-
-					globfree(&dev);
-
-					inclReleaseContext(resource->context);
-
-					free(resource->name);
-					free(resource->vendor);
-					free(resource->version);
-					free(resource);
-
-					return INACCEL_FAILED;
-				}
-
-				break;
-			} else {
-				dev_index++;
-			}
-		}
+		return INACCEL_FAILED;
 	}
 
-	globfree(&dev);
+	char root_path[PATH_MAX];
+	if (sprintf(root_path, "/sys/bus/pci/devices/%s", pcie_bdf) < 0) {
+		perror("Error: sprintf");
 
-	if (!resource->root_path) {
+		free(pcie_bdf);
+
+		inclReleaseContext(resource->context);
+
+		free(resource->name);
+		free(resource->vendor);
+		free(resource->version);
+		free(resource);
+
+		return INACCEL_FAILED;
+	}
+
+	free(pcie_bdf);
+
+	if (!(resource->root_path = strdup(root_path))) {
+		perror("Error: strdup");
+
 		inclReleaseContext(resource->context);
 
 		free(resource->name);
