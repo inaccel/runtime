@@ -63,6 +63,7 @@ struct _cl_resource {
 	unsigned int index;
 
 	char *name;
+	char *pci_id;
 	float power;
 	char *serial_no;
 	float temperature;
@@ -553,6 +554,34 @@ cl_resource create_resource(unsigned int index) {
 		return INACCEL_FAILED;
 	}
 
+	root_path[strlen(root_path) - 1] = '*';
+
+	glob_t device;
+	if (!glob(root_path, GLOB_NOSORT, NULL, &device)) {
+		size_t i;
+		for (i = 0; i < device.gl_pathc; i++) {
+			if (i) {
+				if (!(resource->pci_id = realloc(resource->pci_id, strlen(resource->pci_id) + 14))) {
+					free(resource->pci_id);
+					resource->pci_id = NULL;
+
+					break;
+				}
+
+				strcat(resource->pci_id, ",");
+				strcat(resource->pci_id, basename(device.gl_pathv[i]));
+			} else {
+				if (!(resource->pci_id = malloc(13))) {
+					break;
+				}
+
+				strcpy(resource->pci_id, basename(device.gl_pathv[i]));
+			}
+		}
+
+		globfree(&device);
+	}
+
 	char xmc_pattern[PATH_MAX];
 	if (sprintf(xmc_pattern, "%s/xmc.*", resource->root_path) >= 0) {
 		glob_t xmc;
@@ -608,6 +637,10 @@ char *get_memory_type(cl_memory memory) {
 
 char *get_resource_name(cl_resource resource) {
 	return resource->name;
+}
+
+char *get_resource_pci_id(cl_resource resource) {
+	return resource->pci_id;
 }
 
 float get_resource_power(cl_resource resource) {
@@ -772,6 +805,7 @@ void release_resource(cl_resource resource) {
 
 	free(resource->mem_topology);
 	free(resource->name);
+	free(resource->pci_id);
 	free(resource->root_path);
 	free(resource->serial_no);
 	free(resource->vendor);

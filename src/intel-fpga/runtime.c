@@ -39,6 +39,7 @@ struct _cl_resource {
 	unsigned int index;
 
 	char *name;
+	char *pci_id;
 	float power;
 	char *serial_no;
 	float temperature;
@@ -517,7 +518,7 @@ cl_resource create_resource(unsigned int index) {
 	}
 
 	glob_t dev;
-	if (glob("/sys/devices/pci*/*/{,/*}/fpga/intel-fpga-dev.*/intel-fpga-port.*/dev", GLOB_NOSORT | GLOB_BRACE, NULL, &dev)) {
+	if (glob("/sys/bus/pci/devices/*/fpga/intel-fpga-dev.*/intel-fpga-port.*/dev", GLOB_NOSORT | GLOB_BRACE, NULL, &dev)) {
 		perror("Error: glob");
 
 		inclReleaseContext(resource->context);
@@ -655,6 +656,13 @@ cl_resource create_resource(unsigned int index) {
 		return NULL;
 	}
 
+	char *root_path;
+	if ((root_path = strdup(resource->root_path))) {
+		resource->pci_id = strdup(basename(dirname(dirname(dirname(root_path)))));
+
+		free(root_path);
+	}
+
 	if (pthread_create(&resource->thread, NULL, &sensor_routine, resource)) {
 		perror("Error: pthread_create");
 
@@ -682,6 +690,10 @@ char *get_memory_type(cl_memory memory) {
 
 char *get_resource_name(cl_resource resource) {
 	return resource->name;
+}
+
+char *get_resource_pci_id(cl_resource resource) {
+	return resource->pci_id;
 }
 
 float get_resource_power(cl_resource resource) {
@@ -754,6 +766,7 @@ void release_resource(cl_resource resource) {
 	inclReleaseContext(resource->context);
 
 	free(resource->name);
+	free(resource->pci_id);
 	free(resource->root_path);
 	free(resource->serial_no);
 	free(resource->vendor);
