@@ -433,10 +433,10 @@ cl_resource create_resource(unsigned int index) {
 		return INACCEL_FAILED;
 	}
 
-	const char *regex = "^xilinx_([^_]+)_(.*)_([^_]+)_([^_]+)$";
+	const char *regex = "^xilinx_([^_]+)_((.*)_([^_]+)_([^_]+)|(.*))$";
 
 	regex_t compile;
-	regmatch_t group[5];
+	regmatch_t group[7];
 
 	if (regcomp(&compile, regex, REG_EXTENDED)) {
 		perror("Error: regcomp");
@@ -453,7 +453,7 @@ cl_resource create_resource(unsigned int index) {
 		return INACCEL_FAILED;
 	}
 
-	if (regexec(&compile, raw_name, 5, group, 0)) {
+	if (regexec(&compile, raw_name, 7, group, 0)) {
 		perror("Error: regexec");
 
 		regfree(&compile);
@@ -472,11 +472,19 @@ cl_resource create_resource(unsigned int index) {
 
 	strncpy(resource->name, raw_name + group[1].rm_so, group[1].rm_eo - group[1].rm_so);
 
-	strncpy(resource->version, raw_name + group[2].rm_so, group[2].rm_eo - group[2].rm_so);
-	strcat(resource->version, "_");
-	strncat(resource->version, raw_name + group[3].rm_so, group[3].rm_eo - group[3].rm_so);
-	strcat(resource->version, ".");
-	strncat(resource->version, raw_name + group[4].rm_so, group[4].rm_eo - group[4].rm_so);
+	if (!strcmp(resource->name, "aws-vu9p-f1")) {
+		strcpy(resource->version, "dynamic-shell");
+	} else {
+		if (group[6].rm_so != group[6].rm_eo) {
+			strncpy(resource->version, raw_name + group[6].rm_so, group[6].rm_eo - group[6].rm_so);
+		} else {
+			strncpy(resource->version, raw_name + group[3].rm_so, group[3].rm_eo - group[3].rm_so);
+			strcat(resource->version, "_");
+			strncat(resource->version, raw_name + group[4].rm_so, group[4].rm_eo - group[4].rm_so);
+			strcat(resource->version, ".");
+			strncat(resource->version, raw_name + group[5].rm_so, group[5].rm_eo - group[5].rm_so);
+		}
+	}
 
 	regfree(&compile);
 
