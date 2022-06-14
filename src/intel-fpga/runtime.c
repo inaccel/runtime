@@ -641,11 +641,11 @@ cl_resource create_resource(unsigned int index) {
 
 			break;
 		}
-
-		globfree(&dev);
 	}
 
 	if (!strlen(resource->version)) {
+		globfree(&dev);
+
 		inclReleaseContext(resource->context);
 
 		free(resource->name);
