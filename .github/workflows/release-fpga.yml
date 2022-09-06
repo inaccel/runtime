@@ -1,4 +1,4 @@
-name: release-fpga
+name: Release FPGA
 on:
   workflow_dispatch:
     inputs:
@@ -31,6 +31,7 @@ jobs:
           ```
           curl -sS https://setup.inaccel.com/runtime/fpga | sh -s ${{ github.event.inputs.version }}
         files: configs/fpga.tar.gz
+        name: FPGA ${{ github.event.inputs.version }}
         tag_name: fpga-${{ github.event.inputs.version }}
     - name: Package Debian
       uses: docker://goreleaser/nfpm
