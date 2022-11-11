@@ -56,7 +56,134 @@ struct _cl_resource {
 	char *root_path;
 };
 
-float get_power(char *sdr_path, char *sensors_path) {
+float get_power_1(char *spi_path) {
+	char sensor_pattern[PATH_MAX];
+	if (sprintf(sensor_pattern, "%s/sensor*", spi_path) < 0) {
+		perror("Error: sprintf");
+
+		return 0.0f;
+	}
+
+	glob_t sensor;
+	if (glob(sensor_pattern, GLOB_NOSORT, NULL, &sensor)) {
+		perror("Error: glob");
+
+		return 0.0f;
+	}
+
+	float current = 0.0f;
+	float voltage = 0.0f;
+
+	size_t i;
+	for (i = 0; i < sensor.gl_pathc; i++) {
+		char name_path[PATH_MAX];
+		if (sprintf(name_path, "%s/name", sensor.gl_pathv[i]) < 0) {
+			perror("Error: sprintf");
+
+			globfree(&sensor);
+
+			return 0.0f;
+		}
+
+		FILE *name_stream = fopen(name_path, "r");
+		if (!name_stream) {
+			perror("Error: fopen");
+
+			globfree(&sensor);
+
+			return 0.0f;
+		}
+
+		char name[PATH_MAX];
+		if (!fgets(name, sizeof(name),  name_stream)) {
+			perror("Error: fgets");
+
+			fclose(name_stream);
+
+			globfree(&sensor);
+
+			return 0.0f;
+		}
+
+		fclose(name_stream);
+
+		if (!strncmp("FPGA Core Current", name, strlen("FPGA Core Current"))) {
+			char value_path[PATH_MAX];
+			if (sprintf(value_path, "%s/value", sensor.gl_pathv[i]) < 0) {
+				perror("Error: sprintf");
+
+				globfree(&sensor);
+
+				return 0.0f;
+			}
+
+			FILE *value_stream = fopen(value_path, "r");
+			if (!value_stream) {
+				perror("Error: fopen");
+
+				globfree(&sensor);
+
+				return 0.0f;
+			}
+
+			unsigned int value;
+			if (fscanf(value_stream, "%u", &value) == EOF) {
+				perror("Error: fscanf");
+
+				fclose(value_stream);
+
+				globfree(&sensor);
+
+				return 0.0f;
+			}
+
+			fclose(value_stream);
+
+			current = value / 1000.0f;
+		}
+
+		if (!strncmp("FPGA Core Voltage", name, strlen("FPGA Core Voltage"))) {
+			char value_path[PATH_MAX];
+			if (sprintf(value_path, "%s/value", sensor.gl_pathv[i]) < 0) {
+				perror("Error: sprintf");
+
+				globfree(&sensor);
+
+				return 0.0f;
+			}
+
+			FILE *value_stream = fopen(value_path, "r");
+			if (!value_stream) {
+				perror("Error: fopen");
+
+				globfree(&sensor);
+
+				return 0.0f;
+			}
+
+			unsigned int value;
+			if (fscanf(value_stream, "%u", &value) == EOF) {
+				perror("Error: fscanf");
+
+				fclose(value_stream);
+
+				globfree(&sensor);
+
+				return 0.0f;
+			}
+
+			fclose(value_stream);
+
+			voltage = value / 1000.0f;
+		}
+	}
+
+	globfree(&sensor);
+
+	return current * voltage;
+}
+
+float get_power_2(char *sdr_path, char *sensors_path) {
 	#define SIGN_EXT(val, bitpos) (((val) ^ (1 << (bitpos))) - (1 << (bitpos)))
 
 	unsigned char calc_params[6];
@@ -160,7 +287,98 @@ float get_power(char *sdr_path, char *sensors_path) {
 	return sensor_value;
 }
 
-float get_temperature(char *temperature_path) {
+float get_temperature_1(char *spi_path) {
+	char sensor_pattern[PATH_MAX];
+	if (sprintf(sensor_pattern, "%s/sensor*", spi_path) < 0) {
+		perror("Error: sprintf");
+
+		return 0.0f;
+	}
+
+	glob_t sensor;
+	if (glob(sensor_pattern, GLOB_NOSORT, NULL, &sensor)) {
+		perror("Error: glob");
+
+		return 0.0f;
+	}
+
+	float temperature = 0.0f;
+
+	size_t i;
+	for (i = 0; i < sensor.gl_pathc; i++) {
+		char name_path[PATH_MAX];
+		if (sprintf(name_path, "%s/name", sensor.gl_pathv[i]) < 0) {
+			perror("Error: sprintf");
+
+			globfree(&sensor);
+
+			return 0.0f;
+		}
+
+		FILE *name_stream = fopen(name_path, "r");
+		if (!name_stream) {
+			perror("Error: fopen");
+
+			globfree(&sensor);
+
+			return 0.0f;
+		}
+
+		char name[PATH_MAX];
+		if (!fgets(name, PATH_MAX,  name_stream)) {
+			perror("Error: fgets");
+
+			fclose(name_stream);
+
+			globfree(&sensor);
+
+			return 0.0f;
+		}
+
+		fclose(name_stream);
+
+		if (!strncmp("FPGA Core Temperature", name, strlen("FPGA Core Temperature"))) {
+			char value_path[PATH_MAX];
+			if (sprintf(value_path, "%s/value", sensor.gl_pathv[i]) < 0) {
+				perror("Error: sprintf");
+
+				globfree(&sensor);
+
+				return 0.0f;
+			}
+
+			FILE *value_stream = fopen(value_path, "r");
+			if (!value_stream) {
+				perror("Error: fopen");
+
+				globfree(&sensor);
+
+				return 0.0f;
+			}
+
+			unsigned int value;
+			if (fscanf(value_stream, "%u", &value) == EOF) {
+				perror("Error: fscanf");
+
+				fclose(value_stream);
+
+				globfree(&sensor);
+
+				return 0.0f;
+			}
+
+			fclose(value_stream);
+
+			temperature = value / 1000.0f;
+		}
+	}
+
+	globfree(&sensor);
+
+	return temperature;
+}
+
+float get_temperature_2(char *temperature_path) {
 	FILE *temperature_stream = fopen(temperature_path, "r");
 	if (temperature_stream) {
 		float temperature;
@@ -178,6 +396,7 @@ void *sensor_routine(void *arg) {
 
 	char sdr_path[PATH_MAX] = {0};
 	char sensors_path[PATH_MAX] = {0};
+	char spi_path[PATH_MAX] = {0};
 	char temperature_path[PATH_MAX] = {0};
 
 	char bmc_pattern[PATH_MAX];
@@ -187,6 +406,14 @@ void *sensor_routine(void *arg) {
 			sprintf(sdr_path, "%s/sdr", bmc.gl_pathv[0]);
 			sprintf(sensors_path, "%s/sensors", bmc.gl_pathv[0]);
 			globfree(&bmc);
+		}
+	}
+	char spi_pattern[PATH_MAX];
+	if (sprintf(spi_pattern, "%s/spi-altera*.auto/spi_master/spi*/spi*.*", resource->root_path) >= 0) {
+		glob_t spi;
+		if (!glob(spi_pattern, GLOB_NOSORT, NULL, &spi)) {
+			sprintf(spi_path, "%s", spi.gl_pathv[0]);
+			globfree(&spi);
 		}
 	}
 	sprintf(temperature_path, "%s/thermal_mgmt/temperature", resource->root_path);
@@ -208,11 +435,15 @@ void *sensor_routine(void *arg) {
 		clock_gettime(CLOCK_MONOTONIC, &tp);
 		unsigned long start = SEC_TO_USEC((unsigned long) tp.tv_sec) + NSEC_TO_USEC((unsigned long) tp.tv_nsec);
 
-		if (strlen(sdr_path) && strlen(sensors_path)) {
-			resource->power = get_power(sdr_path, sensors_path);
+		if (strlen(spi_path)) {
+			resource->power = get_power_1(spi_path);
+		} else if (strlen(sdr_path) && strlen(sensors_path)) {
+			resource->power = get_power_2(sdr_path, sensors_path);
 		}
-		if (strlen(temperature_path)) {
-			resource->temperature = get_temperature(temperature_path);
+		if (strlen(spi_path)) {
+			resource->temperature = get_temperature_1(spi_path);
+		} else if (strlen(temperature_path)) {
+			resource->temperature = get_temperature_2(temperature_path);
 		}
 
 		clock_gettime(CLOCK_MONOTONIC, &tp);
@@ -518,7 +749,7 @@ cl_resource create_resource(unsigned int index) {
 	}
 
 	glob_t dev;
-	if (glob("/sys/bus/pci/devices/*/fpga/intel-fpga-dev.*/intel-fpga-port.*/dev", GLOB_NOSORT | GLOB_BRACE, NULL, &dev)) {
+	if (glob("/sys/bus/pci/devices/*/fpga/intel-fpga-dev.*/intel-fpga-port.*/dev", GLOB_NOSORT, NULL, &dev)) {
 		perror("Error: glob");
 
 		inclReleaseContext(resource->context);
@@ -536,8 +767,8 @@ cl_resource create_resource(unsigned int index) {
 		long dev_major;
 		long dev_minor;
 
-		FILE *dev_file = fopen(dev.gl_pathv[i], "r");
-		if (!dev_file) {
+		FILE *dev_stream = fopen(dev.gl_pathv[i], "r");
+		if (!dev_stream) {
 			perror("Error: fopen");
 
 			inclReleaseContext(resource->context);
@@ -550,10 +781,10 @@ cl_resource create_resource(unsigned int index) {
 			return INACCEL_FAILED;
 		}
 
-		if (fscanf(dev_file, "%ld:%ld", &dev_major, &dev_minor) == EOF) {
+		if (fscanf(dev_stream, "%ld:%ld", &dev_major, &dev_minor) == EOF) {
 			perror("Error: fscanf");
 
-			fclose(dev_file);
+			fclose(dev_stream);
 
 			inclReleaseContext(resource->context);
 
@@ -565,7 +796,7 @@ cl_resource create_resource(unsigned int index) {
 			return INACCEL_FAILED;
 		}
 
-		fclose(dev_file);
+		fclose(dev_stream);
 
 		if ((major == dev_major) && (minor == dev_minor)) {
 			char interface_id_pattern[PATH_MAX];
@@ -600,8 +831,8 @@ cl_resource create_resource(unsigned int index) {
 				return INACCEL_FAILED;
 			}
 
-			FILE *interface_id_file = fopen(interface_id.gl_pathv[0], "r");
-			if (!interface_id_file) {
+			FILE *interface_id_stream = fopen(interface_id.gl_pathv[0], "r");
+			if (!interface_id_stream) {
 				perror("Error: fopen");
 
 				globfree(&interface_id);
@@ -616,12 +847,12 @@ cl_resource create_resource(unsigned int index) {
 				return INACCEL_FAILED;
 			}
 
-			if (!fgets(resource->version, UUID + 1, interface_id_file)) {
+			if (!fgets(resource->version, UUID + 1, interface_id_stream)) {
 				perror("Error: fgets");
 
 				globfree(&interface_id);
 
-				fclose(interface_id_file);
+				fclose(interface_id_stream);
 
 				inclReleaseContext(resource->context);
 
@@ -633,7 +864,7 @@ cl_resource create_resource(unsigned int index) {
 				return INACCEL_FAILED;
 			}
 
-			fclose(interface_id_file);
+			fclose(interface_id_stream);
 
 			resource->root_path = strdup(dirname(dirname(interface_id.gl_pathv[0])));
 
