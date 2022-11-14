@@ -71,8 +71,10 @@ float get_power_1(char *spi_path) {
 		return 0.0f;
 	}
 
-	float current = 0.0f;
-	float voltage = 0.0f;
+	float current_auxiliary = 0.0f;
+	float current_pcie = 0.0f;
+	float voltage_auxiliary = 0.0f;
+	float voltage_pcie = 0.0f;
 
 	size_t i;
 	for (i = 0; i < sensor.gl_pathc; i++) {
@@ -107,7 +109,7 @@ float get_power_1(char *spi_path) {
 
 		fclose(name_stream);
 
-		if (!strncmp("FPGA Core Current", name, strlen("FPGA Core Current"))) {
+		if (!strncmp("12v AUX Current", name, strlen("12v AUX Current"))) {
 			char value_path[PATH_MAX];
 			if (sprintf(value_path, "%s/value", sensor.gl_pathv[i]) < 0) {
 				perror("Error: sprintf");
@@ -139,10 +141,10 @@ float get_power_1(char *spi_path) {
 
 			fclose(value_stream);
 
-			current = value / 1000.0f;
+			current_auxiliary = value / 1000.0f;
 		}
 
-		if (!strncmp("FPGA Core Voltage", name, strlen("FPGA Core Voltage"))) {
+		if (!strncmp("12v Backplane Current", name, strlen("12v Backplane Current"))) {
 			char value_path[PATH_MAX];
 			if (sprintf(value_path, "%s/value", sensor.gl_pathv[i]) < 0) {
 				perror("Error: sprintf");
@@ -174,13 +176,83 @@ float get_power_1(char *spi_path) {
 
 			fclose(value_stream);
 
-			voltage = value / 1000.0f;
+			current_pcie = value / 1000.0f;
+		}
+
+		if (!strncmp("12v AUX Voltage", name, strlen("12v AUX Voltage"))) {
+			char value_path[PATH_MAX];
+			if (sprintf(value_path, "%s/value", sensor.gl_pathv[i]) < 0) {
+				perror("Error: sprintf");
+
+				globfree(&sensor);
+
+				return 0.0f;
+			}
+
+			FILE *value_stream = fopen(value_path, "r");
+			if (!value_stream) {
+				perror("Error: fopen");
+
+				globfree(&sensor);
+
+				return 0.0f;
+			}
+
+			unsigned int value;
+			if (fscanf(value_stream, "%u", &value) == EOF) {
+				perror("Error: fscanf");
+
+				fclose(value_stream);
+
+				globfree(&sensor);
+
+				return 0.0f;
+			}
+
+			fclose(value_stream);
+
+			voltage_auxiliary = value / 1000.0f;
+		}
+
+		if (!strncmp("12v Backplane Voltage", name, strlen("12v Backplane Voltage"))) {
+			char value_path[PATH_MAX];
+			if (sprintf(value_path, "%s/value", sensor.gl_pathv[i]) < 0) {
+				perror("Error: sprintf");
+
+				globfree(&sensor);
+
+				return 0.0f;
+			}
+
+			FILE *value_stream = fopen(value_path, "r");
+			if (!value_stream) {
+				perror("Error: fopen");
+
+				globfree(&sensor);
+
+				return 0.0f;
+			}
+
+			unsigned int value;
+			if (fscanf(value_stream, "%u", &value) == EOF) {
+				perror("Error: fscanf");
+
+				fclose(value_stream);
+
+				globfree(&sensor);
+
+				return 0.0f;
+			}
+
+			fclose(value_stream);
+
+			voltage_pcie = value / 1000.0f;
 		}
 	}
 
 	globfree(&sensor);
 
-	return current * voltage;
+	return (current_auxiliary * voltage_auxiliary) + (current_pcie * voltage_pcie);
 }
 
 float get_power_2(char *sdr_path, char *sensors_path) {
