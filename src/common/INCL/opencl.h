@@ -7,9 +7,6 @@
 /* Builds a program executable from the program binary. */
 int inclBuildProgram(cl_program program);
 
-/* Returns a message related to the error code. */
-const char *inclCheckErrorCode(cl_int errcode);
-
 /* Creates a buffer object. */
 cl_mem inclCreateBuffer(cl_context context, cl_mem_flags flags, size_t size, void *host_ptr);
 
@@ -78,9 +75,6 @@ int inclReleaseMemObject(cl_mem memobj);
 
 /* Decrements the program reference count. */
 int inclReleaseProgram(cl_program program);
-
-/* Increments the memory object reference count. */
-int inclRetainMemObject(cl_mem memobj);
 
 /* Used to set the argument value for a specific argument of a kernel. */
 int inclSetKernelArg(cl_kernel kernel, cl_uint arg_index, size_t arg_size, const void *arg_value);

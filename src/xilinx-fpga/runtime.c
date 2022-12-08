@@ -82,7 +82,7 @@ struct _cl_resource {
 	struct mem_topology *mem_topology;
 };
 
-float get_power(char *power_path) {
+static float get_power(char *power_path) {
 	FILE *power_stream = fopen(power_path, "r");
 	if (power_stream) {
 		unsigned int power;
@@ -95,7 +95,7 @@ float get_power(char *power_path) {
 	return 0.0f;
 }
 
-float get_temperature(char *temperature_path) {
+static float get_temperature(char *temperature_path) {
 	FILE *temperature_stream = fopen(temperature_path, "r");
 	if (temperature_stream) {
 		float temperature;
@@ -108,7 +108,7 @@ float get_temperature(char *temperature_path) {
 	return 0.0f;
 }
 
-void *sensor_routine(void *arg) {
+static void *sensor_routine(void *arg) {
 	cl_resource resource = (cl_resource) arg;
 
 	char power_path[PATH_MAX] = {0};

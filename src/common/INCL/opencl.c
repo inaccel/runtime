@@ -3,19 +3,7 @@
 
 #include "opencl.h"
 
-/* Builds a program executable from the program binary. */
-int inclBuildProgram(cl_program program) {
-	cl_int errcode_ret = clBuildProgram(program, 0, NULL, NULL, NULL, NULL);
-	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clBuildProgram %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
-		return EXIT_FAILURE;
-	} else {
-		return EXIT_SUCCESS;
-	}
-}
-
-/* Returns a message related to the error code. */
-const char *inclCheckErrorCode(cl_int errcode) {
+static const char *clError(cl_int errcode) {
 	switch (errcode) {
 		case -1:
 			return "CL_DEVICE_NOT_FOUND";
@@ -142,12 +130,25 @@ const char *inclCheckErrorCode(cl_int errcode) {
 	}
 }
 
+/* Builds a program executable from the program binary. */
+__attribute__ ((visibility ("hidden")))
+int inclBuildProgram(cl_program program) {
+	cl_int errcode_ret = clBuildProgram(program, 0, NULL, NULL, NULL, NULL);
+	if (errcode_ret != CL_SUCCESS) {
+		fprintf(stderr, "Error: clBuildProgram %s (%d)\n", clError(errcode_ret), errcode_ret);
+		return EXIT_FAILURE;
+	} else {
+		return EXIT_SUCCESS;
+	}
+}
+
 /* Creates a buffer object. */
+__attribute__ ((visibility ("hidden")))
 cl_mem inclCreateBuffer(cl_context context, cl_mem_flags flags, size_t size, void *host_ptr) {
 	cl_int errcode_ret;
 	cl_mem mem = clCreateBuffer(context, flags, size, host_ptr, &errcode_ret);
 	if (errcode_ret != CL_SUCCESS || !mem) {
-		fprintf(stderr, "Error: clCreateBuffer %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clCreateBuffer %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return NULL;
 	} else {
 		return mem;
@@ -155,11 +156,12 @@ cl_mem inclCreateBuffer(cl_context context, cl_mem_flags flags, size_t size, voi
 }
 
 /* Create a command-queue on a specific device. */
+__attribute__ ((visibility ("hidden")))
 cl_command_queue inclCreateCommandQueue(cl_context context, cl_device_id device) {
 	cl_int errcode_ret;
 	cl_command_queue command_queue = clCreateCommandQueue(context, device, 0, &errcode_ret);
 	if (errcode_ret != CL_SUCCESS || !command_queue) {
-		fprintf(stderr, "Error: clCreateCommandQueue %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clCreateCommandQueue %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return NULL;
 	} else {
 		return command_queue;
@@ -167,11 +169,12 @@ cl_command_queue inclCreateCommandQueue(cl_context context, cl_device_id device)
 }
 
 /* Creates an OpenCL context. */
+__attribute__ ((visibility ("hidden")))
 cl_context inclCreateContext(cl_device_id device) {
 	cl_int errcode_ret;
 	cl_context context = clCreateContext(NULL, 1, &device, NULL, NULL, &errcode_ret);
 	if (errcode_ret != CL_SUCCESS || !context) {
-		fprintf(stderr, "Error: clCreateContext %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clCreateContext %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return NULL;
 	} else {
 		return context;
@@ -179,11 +182,12 @@ cl_context inclCreateContext(cl_device_id device) {
 }
 
 /* Creates a kernel object. */
+__attribute__ ((visibility ("hidden")))
 cl_kernel inclCreateKernel(cl_program program, const char *kernel_name) {
 	cl_int errcode_ret;
 	cl_kernel kernel = clCreateKernel(program, kernel_name, &errcode_ret);
 	if (errcode_ret != CL_SUCCESS || !kernel) {
-		fprintf(stderr, "Error: clCreateKernel %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clCreateKernel %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return NULL;
 	} else {
 		return kernel;
@@ -191,11 +195,12 @@ cl_kernel inclCreateKernel(cl_program program, const char *kernel_name) {
 }
 
 /* Creates a program object for a context, and loads specified binary data into the program object. */
+__attribute__ ((visibility ("hidden")))
 cl_program inclCreateProgramWithBinary(cl_context context, cl_device_id device, size_t length, const unsigned char *binary) {
 	cl_int errcode_ret;
 	cl_program program = clCreateProgramWithBinary(context, 1, &device, &length, &binary, NULL, &errcode_ret);
 	if (errcode_ret != CL_SUCCESS || !program) {
-		fprintf(stderr, "Error: clCreateProgramWithBinary %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clCreateProgramWithBinary %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return NULL;
 	} else {
 		return program;
@@ -203,10 +208,11 @@ cl_program inclCreateProgramWithBinary(cl_context context, cl_device_id device, 
 }
 
 /* Enqueues a command to indicate which device a memory object should be associated with. */
+__attribute__ ((visibility ("hidden")))
 int inclEnqueueMigrateMemObject(cl_command_queue command_queue, cl_mem mem_object, cl_mem_migration_flags flags) {
 	cl_int errcode_ret = clEnqueueMigrateMemObjects(command_queue, 1, &mem_object, flags, 0, NULL, NULL);
 	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clEnqueueMigrateMemObjects %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clEnqueueMigrateMemObjects %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;
@@ -214,10 +220,11 @@ int inclEnqueueMigrateMemObject(cl_command_queue command_queue, cl_mem mem_objec
 }
 
 /* Enqueue commands to read from a buffer object to host memory. */
+__attribute__ ((visibility ("hidden")))
 int inclEnqueueReadBuffer(cl_command_queue command_queue, cl_mem buffer, size_t offset, size_t cb, void *ptr) {
 	cl_int errcode_ret = clEnqueueReadBuffer(command_queue, buffer, CL_FALSE, offset, cb, ptr, 0, NULL, NULL);
 	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clEnqueueReadBuffer %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clEnqueueReadBuffer %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;
@@ -225,10 +232,11 @@ int inclEnqueueReadBuffer(cl_command_queue command_queue, cl_mem buffer, size_t 
 }
 
 /* Enqueues a command to execute a kernel on a device. */
+__attribute__ ((visibility ("hidden")))
 int inclEnqueueTask(cl_command_queue command_queue, cl_kernel kernel) {
 	cl_int errcode_ret = clEnqueueTask(command_queue, kernel, 0, NULL, NULL);
 	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clEnqueueTask %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clEnqueueTask %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;
@@ -236,10 +244,11 @@ int inclEnqueueTask(cl_command_queue command_queue, cl_kernel kernel) {
 }
 
 /* Enqueue commands to write to a buffer object from host memory. */
+__attribute__ ((visibility ("hidden")))
 int inclEnqueueWriteBuffer(cl_command_queue command_queue, cl_mem buffer, size_t offset, size_t cb, const void *ptr) {
 	cl_int errcode_ret = clEnqueueWriteBuffer(command_queue, buffer, CL_FALSE, offset, cb, ptr, 0, NULL, NULL);
 	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clEnqueueWriteBuffer %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clEnqueueWriteBuffer %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;
@@ -247,10 +256,11 @@ int inclEnqueueWriteBuffer(cl_command_queue command_queue, cl_mem buffer, size_t
 }
 
 /* Blocks until all previously queued OpenCL commands in a command-queue are issued to the associated device and have completed. */
+__attribute__ ((visibility ("hidden")))
 int inclFinish(cl_command_queue command_queue) {
 	cl_int errcode_ret = clFinish(command_queue);
 	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clFinish %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clFinish %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;
@@ -258,6 +268,7 @@ int inclFinish(cl_command_queue command_queue) {
 }
 
 /* Obtain specified device, if available. */
+__attribute__ ((visibility ("hidden")))
 cl_device_id inclGetDeviceID(cl_platform_id platform, cl_uint device_id) {
 	cl_device_id device = NULL;
 
@@ -291,10 +302,11 @@ cl_device_id inclGetDeviceID(cl_platform_id platform, cl_uint device_id) {
 }
 
 /* Obtain the list of devices available on a platform. */
+__attribute__ ((visibility ("hidden")))
 int inclGetDeviceIDs(cl_platform_id platform, cl_uint num_entries, cl_device_id *devices, cl_uint *num_devices) {
 	cl_int errcode_ret = clGetDeviceIDs(platform, CL_DEVICE_TYPE_ALL, num_entries, devices, num_devices);
 	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clGetDeviceIDs %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clGetDeviceIDs %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;
@@ -302,10 +314,11 @@ int inclGetDeviceIDs(cl_platform_id platform, cl_uint num_entries, cl_device_id 
 }
 
 /* Get specific information about the OpenCL device. */
+__attribute__ ((visibility ("hidden")))
 int inclGetDeviceInfo(cl_device_id device, cl_device_info param_name, size_t param_value_size, void *param_value, size_t *param_value_size_ret) {
 	cl_int errcode_ret = clGetDeviceInfo(device, param_name, param_value_size, param_value, param_value_size_ret);
 	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clGetDeviceInfo %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clGetDeviceInfo %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;
@@ -313,10 +326,11 @@ int inclGetDeviceInfo(cl_device_id device, cl_device_info param_name, size_t par
 }
 
 /* Get specific information about the OpenCL kernel. */
+__attribute__ ((visibility ("hidden")))
 int inclGetKernelInfo(cl_kernel kernel, cl_kernel_info param_name, size_t param_value_size, void *param_value, size_t *param_value_size_ret) {
 	cl_int errcode_ret = clGetKernelInfo(kernel, param_name, param_value_size, param_value, param_value_size_ret);
 	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clGetKernelInfo %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clGetKernelInfo %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;
@@ -324,10 +338,11 @@ int inclGetKernelInfo(cl_kernel kernel, cl_kernel_info param_name, size_t param_
 }
 
 /* Get specific information about the OpenCL buffer. */
+__attribute__ ((visibility ("hidden")))
 int inclGetMemObjectInfo(cl_mem memobj, cl_mem_info param_name, size_t param_value_size, void *param_value, size_t *param_value_size_ret ) {
 	cl_int errcode_ret = clGetMemObjectInfo(memobj, param_name, param_value_size, param_value, param_value_size_ret);
 	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clGetMemObjectInfo %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clGetMemObjectInfo %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;
@@ -335,6 +350,7 @@ int inclGetMemObjectInfo(cl_mem memobj, cl_mem_info param_name, size_t param_val
 }
 
 /* Obtain specified platform, if available. */
+__attribute__ ((visibility ("hidden")))
 cl_platform_id inclGetPlatformID(const char *platform_id) {
 	cl_platform_id platform = NULL;
 
@@ -384,10 +400,11 @@ cl_platform_id inclGetPlatformID(const char *platform_id) {
 }
 
 /* Obtain the list of platforms available. */
+__attribute__ ((visibility ("hidden")))
 int inclGetPlatformIDs(cl_uint num_entries, cl_platform_id *platforms, cl_uint *num_platforms) {
 	cl_int errcode_ret = clGetPlatformIDs(num_entries, platforms, num_platforms);
 	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clGetPlatformIDs %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clGetPlatformIDs %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;
@@ -395,10 +412,11 @@ int inclGetPlatformIDs(cl_uint num_entries, cl_platform_id *platforms, cl_uint *
 }
 
 /* Get specific information about the OpenCL platform. */
+__attribute__ ((visibility ("hidden")))
 int inclGetPlatformInfo(cl_platform_id platform, cl_platform_info param_name, size_t param_value_size, void *param_value, size_t *param_value_size_ret) {
 	cl_int errcode_ret = clGetPlatformInfo(platform, param_name, param_value_size, param_value, param_value_size_ret);
 	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clGetPlatformInfo %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clGetPlatformInfo %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;
@@ -406,10 +424,11 @@ int inclGetPlatformInfo(cl_platform_id platform, cl_platform_info param_name, si
 }
 
 /* Decrements the command_queue reference count. */
+__attribute__ ((visibility ("hidden")))
 int inclReleaseCommandQueue(cl_command_queue command_queue) {
 	cl_int errcode_ret = clReleaseCommandQueue(command_queue);
 	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clReleaseCommandQueue %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clReleaseCommandQueue %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;
@@ -417,10 +436,11 @@ int inclReleaseCommandQueue(cl_command_queue command_queue) {
 }
 
 /* Decrement the context reference count. */
+__attribute__ ((visibility ("hidden")))
 int inclReleaseContext(cl_context context) {
 	cl_int errcode_ret = clReleaseContext(context);
 	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clReleaseContext %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clReleaseContext %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;
@@ -428,10 +448,11 @@ int inclReleaseContext(cl_context context) {
 }
 
 /* Decrements the kernel reference count. */
+__attribute__ ((visibility ("hidden")))
 int inclReleaseKernel(cl_kernel kernel) {
 	cl_int errcode_ret = clReleaseKernel(kernel);
 	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clReleaseKernel %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clReleaseKernel %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;
@@ -439,10 +460,11 @@ int inclReleaseKernel(cl_kernel kernel) {
 }
 
 /* Decrements the memory object reference count. */
+__attribute__ ((visibility ("hidden")))
 int inclReleaseMemObject(cl_mem memobj) {
 	cl_int errcode_ret = clReleaseMemObject(memobj);
 	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clReleaseMemObject %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clReleaseMemObject %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;
@@ -450,32 +472,23 @@ int inclReleaseMemObject(cl_mem memobj) {
 }
 
 /* Decrements the program reference count. */
+__attribute__ ((visibility ("hidden")))
 int inclReleaseProgram(cl_program program) {
 	cl_int errcode_ret = clReleaseProgram(program);
 	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clReleaseProgram %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clReleaseProgram %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;
 	}
 }
 
-/* Increments the memory object reference count. */
-int inclRetainMemObject(cl_mem memobj) {
-		cl_int errcode_ret = clRetainMemObject(memobj);
-		if (errcode_ret != CL_SUCCESS) {
-			fprintf(stderr, "Error: clRetainMemObject %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
-			return EXIT_FAILURE;
-		} else {
-			return EXIT_SUCCESS;
-		}
-}
-
 /* Used to set the argument value for a specific argument of a kernel. */
+__attribute__ ((visibility ("hidden")))
 int inclSetKernelArg(cl_kernel kernel, cl_uint arg_index, size_t arg_size, const void *arg_value) {
 	cl_int errcode_ret = clSetKernelArg(kernel, arg_index, arg_size, arg_value);
 	if (errcode_ret != CL_SUCCESS) {
-		fprintf(stderr, "Error: clSetKernelArg %s (%d)\n", inclCheckErrorCode(errcode_ret), errcode_ret);
+		fprintf(stderr, "Error: clSetKernelArg %s (%d)\n", clError(errcode_ret), errcode_ret);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;

@@ -56,7 +56,7 @@ struct _cl_resource {
 	char *root_path;
 };
 
-float get_power_1(char *spi_path) {
+static float get_power_1(char *spi_path) {
 	char sensor_pattern[PATH_MAX];
 	if (sprintf(sensor_pattern, "%s/sensor*", spi_path) < 0) {
 		perror("Error: sprintf");
@@ -255,7 +255,7 @@ float get_power_1(char *spi_path) {
 	return (current_auxiliary * voltage_auxiliary) + (current_pcie * voltage_pcie);
 }
 
-float get_power_2(char *sdr_path, char *sensors_path) {
+static float get_power_2(char *sdr_path, char *sensors_path) {
 	#define SIGN_EXT(val, bitpos) (((val) ^ (1 << (bitpos))) - (1 << (bitpos)))
 
 	unsigned char calc_params[6];
@@ -359,7 +359,7 @@ float get_power_2(char *sdr_path, char *sensors_path) {
 	return sensor_value;
 }
 
-float get_temperature_1(char *spi_path) {
+static float get_temperature_1(char *spi_path) {
 	char sensor_pattern[PATH_MAX];
 	if (sprintf(sensor_pattern, "%s/sensor*", spi_path) < 0) {
 		perror("Error: sprintf");
@@ -450,7 +450,7 @@ float get_temperature_1(char *spi_path) {
 	return temperature;
 }
 
-float get_temperature_2(char *temperature_path) {
+static float get_temperature_2(char *temperature_path) {
 	FILE *temperature_stream = fopen(temperature_path, "r");
 	if (temperature_stream) {
 		float temperature;
@@ -463,7 +463,7 @@ float get_temperature_2(char *temperature_path) {
 	return 0.0f;
 }
 
-void *sensor_routine(void *arg) {
+static void *sensor_routine(void *arg) {
 	cl_resource resource = (cl_resource) arg;
 
 	char sdr_path[PATH_MAX] = {0};
