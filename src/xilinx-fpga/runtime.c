@@ -8,6 +8,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "inaccel/runtime/intercept.h"
 #include "INCL/opencl.h"
 
 struct mem_data {

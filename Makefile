@@ -26,10 +26,12 @@ $(eval include $(SRC)/$(1)/.mk)
 	$$(LINK.o) $$^ $$(OUTPUT_OPTION)
 endef
 
-%.o: %.c
+%.o: %.c FORCE
 	$(COMPILE.c) $(OUTPUT_OPTION) $<
 
-%.o: %.cpp
+%.o: %.cpp FORCE
 	$(COMPILE.cpp) $(OUTPUT_OPTION) $<
+
+FORCE:
 
 $(foreach RUNTIME,$(RUNTIMES),$(eval $(call TEMPLATE,$(RUNTIME))))

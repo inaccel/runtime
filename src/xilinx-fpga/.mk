@@ -1,3 +1,3 @@
-xilinx-fpga = INCL/opencl runtime
-xilinx-fpga_CFLAGS = -O3 -Wall -fPIC
-xilinx-fpga_LDFLAGS = -shared
+xilinx-fpga = inaccel/runtime/intercept INCL/opencl runtime
+xilinx-fpga_CFLAGS = -O3 -Wall -DNDEBUG -fPIC
+xilinx-fpga_LDFLAGS = -shared -Wl,--allow-multiple-definition

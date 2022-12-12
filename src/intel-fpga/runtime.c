@@ -8,6 +8,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "inaccel/runtime/intercept.h"
 #include "INCL/opencl.h"
 
 struct _cl_buffer {
@@ -97,7 +98,7 @@ static float get_power_1(char *spi_path) {
 		}
 
 		char name[PATH_MAX];
-		if (!fgets(name, sizeof(name),  name_stream)) {
+		if (!fgets(name, sizeof(name), name_stream)) {
 			perror("Error: fgets");
 
 			fclose(name_stream);
@@ -397,7 +398,7 @@ static float get_temperature_1(char *spi_path) {
 		}
 
 		char name[PATH_MAX];
-		if (!fgets(name, PATH_MAX,  name_stream)) {
+		if (!fgets(name, PATH_MAX, name_stream)) {
 			perror("Error: fgets");
 
 			fclose(name_stream);

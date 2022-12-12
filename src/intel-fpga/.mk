@@ -1,3 +1,3 @@
-intel-fpga = INCL/opencl runtime
-intel-fpga_CFLAGS = -O3 -Wall -fPIC
-intel-fpga_LDFLAGS = -shared
+intel-fpga = inaccel/runtime/intercept INCL/opencl runtime
+intel-fpga_CFLAGS = -O3 -Wall -DNDEBUG -fPIC
+intel-fpga_LDFLAGS = -shared -Wl,--allow-multiple-definition
