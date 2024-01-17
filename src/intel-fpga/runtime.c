@@ -823,16 +823,18 @@ cl_resource create_resource(unsigned int index) {
 
 	glob_t dev;
 	if (glob("/sys/bus/pci/devices/*/fpga/intel-fpga-dev.*/intel-fpga-port.*/dev", GLOB_NOSORT, NULL, &dev)) {
-		perror("Error: glob");
+		if (glob("/sys/bus/pci/devices/*/fpga_region/region*/dfl-port.*/dev", GLOB_NOSORT, NULL, &dev)) {
+			perror("Error: glob");
 
-		inclReleaseContext(resource->context);
+			inclReleaseContext(resource->context);
 
-		free(resource->name);
-		free(resource->vendor);
-		free(resource->version);
-		free(resource);
+			free(resource->name);
+			free(resource->vendor);
+			free(resource->version);
+			free(resource);
 
-		return INACCEL_FAILED;
+			return INACCEL_FAILED;
+		}
 	}
 
 	size_t i;
@@ -872,8 +874,26 @@ cl_resource create_resource(unsigned int index) {
 		fclose(dev_stream);
 
 		if ((major == dev_major) && (minor == dev_minor)) {
-			char interface_id_pattern[PATH_MAX];
-			if (sprintf(interface_id_pattern, "%s/intel-fpga-fme.*/pr/interface_id", dirname(dirname(dev.gl_pathv[i]))) < 0) {
+			char *path = dirname(dirname(dev.gl_pathv[i]));
+
+			char compat_id_pattern[PATH_MAX];
+			if (sprintf(compat_id_pattern, "%s/dfl-fme.*/dfl-fme-region.*/fpga_region/region*/compat_id", path) < 0) {
+				perror("Error: sprintf");
+
+				globfree(&dev);
+
+				inclReleaseContext(resource->context);
+
+				free(resource->name);
+				free(resource->vendor);
+				free(resource->version);
+				free(resource);
+
+				return INACCEL_FAILED;
+			}
+
+			char pr_interface_id_pattern[PATH_MAX];
+			if (sprintf(pr_interface_id_pattern, "%s/intel-fpga-fme.*/pr/interface_id", path) < 0) {
 				perror("Error: sprintf");
 
 				globfree(&dev);
@@ -890,25 +910,27 @@ cl_resource create_resource(unsigned int index) {
 
 			globfree(&dev);
 
-			glob_t interface_id;
-			if (glob(interface_id_pattern, GLOB_NOSORT, NULL, &interface_id)) {
-				perror("Error: glob");
+			glob_t id;
+			if (glob(compat_id_pattern, GLOB_NOSORT, NULL, &id)) {
+				if (glob(pr_interface_id_pattern, GLOB_NOSORT, NULL, &id)) {
+					perror("Error: glob");
 
-				inclReleaseContext(resource->context);
+					inclReleaseContext(resource->context);
 
-				free(resource->name);
-				free(resource->vendor);
-				free(resource->version);
-				free(resource);
+					free(resource->name);
+					free(resource->vendor);
+					free(resource->version);
+					free(resource);
 
-				return INACCEL_FAILED;
+					return INACCEL_FAILED;
+				}
 			}
 
-			FILE *interface_id_stream = fopen(interface_id.gl_pathv[0], "r");
-			if (!interface_id_stream) {
+			FILE *id_stream = fopen(id.gl_pathv[0], "r");
+			if (!id_stream) {
 				perror("Error: fopen");
 
-				globfree(&interface_id);
+				globfree(&id);
 
 				inclReleaseContext(resource->context);
 
@@ -920,12 +942,12 @@ cl_resource create_resource(unsigned int index) {
 				return INACCEL_FAILED;
 			}
 
-			if (!fgets(resource->version, UUID + 1, interface_id_stream)) {
+			if (!fgets(resource->version, UUID + 1, id_stream)) {
 				perror("Error: fgets");
 
-				globfree(&interface_id);
+				globfree(&id);
 
-				fclose(interface_id_stream);
+				fclose(id_stream);
 
 				inclReleaseContext(resource->context);
 
@@ -937,11 +959,15 @@ cl_resource create_resource(unsigned int index) {
 				return INACCEL_FAILED;
 			}
 
-			fclose(interface_id_stream);
+			fclose(id_stream);
 
-			resource->root_path = strdup(dirname(dirname(interface_id.gl_pathv[0])));
+			if (!strncmp(id.gl_pathv[0] + strlen(id.gl_pathv[0]) - strlen("compat_id"), "compat_id", strlen("compat_id"))) {
+				resource->root_path = strdup(dirname(id.gl_pathv[0]));
+			} else if (!strncmp(id.gl_pathv[0] + strlen(id.gl_pathv[0]) - strlen("pr/interface_id"), "pr/interface_id", strlen("pr/interface_id"))) {
+				resource->root_path = strdup(dirname(dirname(id.gl_pathv[0])));
+			}
 
-			globfree(&interface_id);
+			globfree(&id);
 
 			break;
 		}
@@ -962,7 +988,7 @@ cl_resource create_resource(unsigned int index) {
 
 	char *root_path;
 	if ((root_path = strdup(resource->root_path))) {
-		resource->pci_id = strdup(basename(dirname(dirname(dirname(root_path)))));
+		resource->pci_id = strdup(strtok(root_path, "/sys/bus/pci/devices"));
 
 		free(root_path);
 	}
