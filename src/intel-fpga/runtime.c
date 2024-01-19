@@ -1051,6 +1051,21 @@ int program_resource_with_binary(cl_resource resource, size_t size, const void *
 		inclReleaseProgram(resource->program);
 		resource->program = NULL;
 	}
+	if (resource->context) {
+		cl_program program = inclCreateProgramWithBinary(resource->context, resource->device_id, size, binary);
+		if (!program) {
+			return EXIT_FAILURE;
+		}
+
+		inclReleaseProgram(program);
+
+		inclReleaseContext(resource->context);
+		resource->context = NULL;
+	}
+
+	if (!(resource->context = inclCreateContext(resource->device_id))) {
+		return EXIT_FAILURE;
+	}
 
 	if (!(resource->program = inclCreateProgramWithBinary(resource->context, resource->device_id, size, binary))) {
 		return EXIT_FAILURE;
@@ -1093,7 +1108,9 @@ void release_resource(cl_resource resource) {
 	if (resource->program) {
 		inclReleaseProgram(resource->program);
 	}
-	inclReleaseContext(resource->context);
+	if (resource->context) {
+		inclReleaseContext(resource->context);
+	}
 
 	free(resource->name);
 	free(resource->pci_id);
