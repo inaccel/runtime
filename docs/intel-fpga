@@ -30,27 +30,28 @@ fi
 cp ${INACCEL_RUNTIMES}/intel-fpga/inaccel.pc ${INACCEL_RUNTIMES}/intel-fpga/.inaccel.pc.swp
 trap "rm ${INACCEL_RUNTIMES}/intel-fpga/.inaccel.pc.swp" EXIT
 i=1
-for library in libalteracl.so libintel_opae_mmd.so; do
-	echo Locating ${library} ...
-	paths=$(locate -e ${library} || :)
+for library in alteracl intel_opae_mmd opae-v xfpga; do
+	echo Locating ${library} library...
+	paths=$(locate -e lib${library}.so || :)
 	if [ -z "${paths}" ]; then
-		echo Error: Unable to locate ${library}
-		exit 1
-	fi
-	n=$(wc -w <<< ${paths})
-	if [ ${n} == "1" ]; then
-		PS3="Please select a path [1]: "
+		>&2 echo Error: Unable to locate lib${library}.so
 	else
-		PS3="Please select a path [1-${n}]: "
-	fi
-	select path in ${paths}; do
-		if [ ! -z ${path} ]; then
-			echo ---
-			dir=$(dirname ${path})
-			break
+		n=$(wc -w <<< ${paths})
+		if [ ${n} == "1" ]; then
+			dir=$(dirname ${paths})
+		else
+			PS3="Please select a path [1-${n}]: "
+			select path in ${paths}; do
+				if [ ! -z ${path} ]; then
+					dir=$(dirname ${path})
+					break
+				fi
+			done
 		fi
-	done
-	sed -i "s|-L\S*|-L${dir}|${i}" ${INACCEL_RUNTIMES}/intel-fpga/.inaccel.pc.swp
+		sed -zi "s|-L\S*|-L${dir}|${i}" ${INACCEL_RUNTIMES}/intel-fpga/.inaccel.pc.swp
+		sed -i "/-l${library}/s|^#||" ${INACCEL_RUNTIMES}/intel-fpga/.inaccel.pc.swp
+	fi
+	echo ---
 	let i+=1
 done
 echo ${INACCEL_RUNTIMES}/intel-fpga/inaccel.pc:
