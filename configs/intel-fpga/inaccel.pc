@@ -3,4 +3,4 @@ Version: 2
 Description: The default 'Intel FPGA' runtime
 URL: https://github.com/inaccel/runtime
 Libs: -L/path/to/host/linux64/lib -L/path/to/opencl_bsp/linux64/lib -lalteracl -lintel_opae_mmd
-#Libs.private: -L/path/to/opae -L/path/to/opae -lopae-v -lxfpga
+#Libs.private: -L/path/to/opae -L/path/to/opae -L/path/to/opae -lopae-u -lopae-v -lxfpga

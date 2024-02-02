@@ -30,7 +30,7 @@ fi
 cp ${INACCEL_RUNTIMES}/intel-fpga/inaccel.pc ${INACCEL_RUNTIMES}/intel-fpga/.inaccel.pc.swp
 trap "rm ${INACCEL_RUNTIMES}/intel-fpga/.inaccel.pc.swp" EXIT
 i=1
-for library in alteracl intel_opae_mmd opae-v xfpga; do
+for library in alteracl intel_opae_mmd opae-u opae-v xfpga; do
 	echo Locating ${library} library...
 	paths=$(locate -e lib${library}.so || :)
 	if [ -z "${paths}" ]; then
