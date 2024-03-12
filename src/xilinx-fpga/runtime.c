@@ -640,15 +640,15 @@ size_t get_memory_size(cl_memory memory) {
 	return memory->size;
 }
 
-char *get_memory_type(cl_memory memory) {
+const char *get_memory_type(cl_memory memory) {
 	return memory->type;
 }
 
-char *get_resource_name(cl_resource resource) {
+const char *get_resource_name(cl_resource resource) {
 	return resource->name;
 }
 
-char *get_resource_pci_id(cl_resource resource) {
+const char *get_resource_pci_id(cl_resource resource) {
 	return resource->pci_id;
 }
 
@@ -656,7 +656,7 @@ float get_resource_power(cl_resource resource) {
 	return resource->power;
 }
 
-char *get_resource_serial_no(cl_resource resource) {
+const char *get_resource_serial_no(cl_resource resource) {
 	return resource->serial_no;
 }
 
@@ -664,11 +664,11 @@ float get_resource_temperature(cl_resource resource) {
 	return resource->temperature;
 }
 
-char *get_resource_vendor(cl_resource resource) {
+const char *get_resource_vendor(cl_resource resource) {
 	return resource->vendor;
 }
 
-char *get_resource_version(cl_resource resource) {
+const char *get_resource_version(cl_resource resource) {
 	return resource->version;
 }
 

@@ -75,42 +75,42 @@ cl_resource create_resource(unsigned int index) {
 	return resource;
 }
 
-char *get_resource_vendor(cl_resource resource) {
+const char *get_resource_vendor(cl_resource resource) {
 	LOGGER;
 	LOG(": resource = %p", resource);
-	char *vendor = __inaccel_get_resource_vendor(resource);
+	const char *vendor = __inaccel_get_resource_vendor(resource);
 	LOG_RETURNED(": vendor = %s", vendor);
 	return vendor;
 }
 
-char *get_resource_name(cl_resource resource) {
+const char *get_resource_name(cl_resource resource) {
 	LOGGER;
 	LOG(": resource = %p", resource);
-	char *name = __inaccel_get_resource_name(resource);
+	const char *name = __inaccel_get_resource_name(resource);
 	LOG_RETURNED(": name = %s", name);
 	return name;
 }
 
-char *get_resource_version(cl_resource resource) {
+const char *get_resource_version(cl_resource resource) {
 	LOGGER;
 	LOG(": resource = %p", resource);
-	char *version = __inaccel_get_resource_version(resource);
+	const char *version = __inaccel_get_resource_version(resource);
 	LOG_RETURNED(": version = %s", version);
 	return version;
 }
 
-char *get_resource_pci_id(cl_resource resource) {
+const char *get_resource_pci_id(cl_resource resource) {
 	LOGGER;
 	LOG(": resource = %p", resource);
-	char *pci_id = __inaccel_get_resource_pci_id(resource);
+	const char *pci_id = __inaccel_get_resource_pci_id(resource);
 	LOG_RETURNED(": pci_id = %s", pci_id);
 	return pci_id;
 }
 
-char *get_resource_serial_no(cl_resource resource) {
+const char *get_resource_serial_no(cl_resource resource) {
 	LOGGER;
 	LOG(": resource = %p", resource);
-	char *serial_no = __inaccel_get_resource_serial_no(resource);
+	const char *serial_no = __inaccel_get_resource_serial_no(resource);
 	LOG_RETURNED(": serial_no = %s", serial_no);
 	return serial_no;
 }
@@ -158,10 +158,10 @@ cl_memory create_memory(cl_resource resource, unsigned int index) {
 	return memory;
 }
 
-char *get_memory_type(cl_memory memory) {
+const char *get_memory_type(cl_memory memory) {
 	LOGGER;
 	LOG(": memory = %p", memory);
-	char *type = __inaccel_get_memory_type(memory);
+	const char *type = __inaccel_get_memory_type(memory);
 	LOG_RETURNED(": type = %s", type);
 	return type;
 }

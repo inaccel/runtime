@@ -25,27 +25,27 @@ cl_resource __inaccel_create_resource(unsigned int index);
 #ifdef INACCEL_RUNTIME_H
 __attribute__ ((weak, alias("get_resource_vendor"), visibility ("hidden")))
 #endif
-char *__inaccel_get_resource_vendor(cl_resource resource);
+const char *__inaccel_get_resource_vendor(cl_resource resource);
 
 #ifdef INACCEL_RUNTIME_H
 __attribute__ ((weak, alias("get_resource_name"), visibility ("hidden")))
 #endif
-char *__inaccel_get_resource_name(cl_resource resource);
+const char *__inaccel_get_resource_name(cl_resource resource);
 
 #ifdef INACCEL_RUNTIME_H
 __attribute__ ((weak, alias("get_resource_version"), visibility ("hidden")))
 #endif
-char *__inaccel_get_resource_version(cl_resource resource);
+const char *__inaccel_get_resource_version(cl_resource resource);
 
 #ifdef INACCEL_RUNTIME_H
 __attribute__ ((weak, alias("get_resource_pci_id"), visibility ("hidden")))
 #endif
-char *__inaccel_get_resource_pci_id(cl_resource resource);
+const char *__inaccel_get_resource_pci_id(cl_resource resource);
 
 #ifdef INACCEL_RUNTIME_H
 __attribute__ ((weak, alias("get_resource_serial_no"), visibility ("hidden")))
 #endif
-char *__inaccel_get_resource_serial_no(cl_resource resource);
+const char *__inaccel_get_resource_serial_no(cl_resource resource);
 
 #ifdef INACCEL_RUNTIME_H
 __attribute__ ((weak, alias("get_resource_power"), visibility ("hidden")))
@@ -79,7 +79,7 @@ cl_memory __inaccel_create_memory(cl_resource resource, unsigned int index);
 #ifdef INACCEL_RUNTIME_H
 __attribute__ ((weak, alias("get_memory_type"), visibility ("hidden")))
 #endif
-char *__inaccel_get_memory_type(cl_memory memory);
+const char *__inaccel_get_memory_type(cl_memory memory);
 
 #ifdef INACCEL_RUNTIME_H
 __attribute__ ((weak, alias("get_memory_size"), visibility ("hidden")))
